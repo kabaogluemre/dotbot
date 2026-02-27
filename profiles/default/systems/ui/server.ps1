@@ -263,6 +263,18 @@ try {
         $contentType = "text/html; charset=utf-8"
         $content = ""
 
+        # CSRF protection: require X-Dotbot-Request header on state-changing requests.
+        # Browsers enforce CORS preflight for custom headers, blocking cross-origin attacks.
+        if ($method -in @('POST', 'PUT', 'DELETE')) {
+            $csrfHeader = $request.Headers['X-Dotbot-Request']
+            if ($csrfHeader -ne '1') {
+                $statusCode = 403
+                $contentType = "application/json; charset=utf-8"
+                $content = '{"success":false,"error":"Missing CSRF header"}'
+            }
+        }
+
+        if ($statusCode -eq 200) {
         try {
             Write-Verbose "Processing URL: $url"
             switch ($url) {
@@ -547,6 +559,65 @@ try {
                         } catch {
                             $statusCode = 500
                             $content = @{ success = $false; error = "Failed to update cost config: $($_.Exception.Message)" } | ConvertTo-Json -Compress
+                        }
+                    }
+                    else {
+                        $statusCode = 405
+                        $content = "Method not allowed"
+                    }
+                    break
+                }
+
+                "/api/config/editor" {
+                    $contentType = "application/json; charset=utf-8"
+                    if ($method -eq "GET") {
+                        $result = Get-EditorConfig
+                        if ($result._statusCode) { $statusCode = $result._statusCode; $result.Remove('_statusCode') }
+                        $content = $result | ConvertTo-Json -Depth 5 -Compress
+                    }
+                    elseif ($method -eq "POST") {
+                        try {
+                            $reader = New-Object System.IO.StreamReader($request.InputStream)
+                            $body = $reader.ReadToEnd() | ConvertFrom-Json
+                            $reader.Close()
+                            $result = Set-EditorConfig -Body $body
+                            $content = $result | ConvertTo-Json -Depth 5 -Compress
+                        } catch {
+                            $statusCode = 500
+                            $content = @{ success = $false; error = "Failed to update editor config: $($_.Exception.Message)" } | ConvertTo-Json -Compress
+                        }
+                    }
+                    else {
+                        $statusCode = 405
+                        $content = "Method not allowed"
+                    }
+                    break
+                }
+
+                "/api/editors" {
+                    $contentType = "application/json; charset=utf-8"
+                    if ($method -eq "GET") {
+                        $refresh = $request.Url.Query -match 'refresh=true'
+                        $result = Get-EditorRegistry -Refresh:$refresh
+                        $content = $result | ConvertTo-Json -Depth 5 -Compress
+                    }
+                    else {
+                        $statusCode = 405
+                        $content = "Method not allowed"
+                    }
+                    break
+                }
+
+                "/api/open-editor" {
+                    $contentType = "application/json; charset=utf-8"
+                    if ($method -eq "POST") {
+                        try {
+                            $result = Invoke-OpenEditor -ProjectRoot $projectRoot
+                            if ($result._statusCode) { $statusCode = $result._statusCode; $result.Remove('_statusCode') }
+                            $content = $result | ConvertTo-Json -Depth 5 -Compress
+                        } catch {
+                            $statusCode = 500
+                            $content = @{ success = $false; error = "Failed to open editor: $($_.Exception.Message)" } | ConvertTo-Json -Compress
                         }
                     }
                     else {
@@ -1056,6 +1127,7 @@ try {
             Write-Host "  Line: $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
             Write-Host "  Statement: $($_.InvocationInfo.Line.Trim())" -ForegroundColor Red
         }
+        } # end CSRF-safe block
 
         # Send response (wrapped to handle client disconnects gracefully)
         try {

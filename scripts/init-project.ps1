@@ -180,8 +180,8 @@ if ($DryRun) {
 # ---------------------------------------------------------------------------
 if ((Test-Path $BotDir) -and $Force) {
     Write-Status "Updating .bot system files (preserving workspace data)"
-    # Remove only system/config directories and root files -- never workspace/
-    $systemDirs = @("systems", "prompts", "hooks", "defaults", ".control")
+    # Remove only system/config directories and root files -- never workspace/ or .control/
+    $systemDirs = @("systems", "prompts", "hooks", "defaults")
     foreach ($dir in $systemDirs) {
         $dirPath = Join-Path $BotDir $dir
         if (Test-Path $dirPath) {

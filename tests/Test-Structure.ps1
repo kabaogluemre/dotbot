@@ -245,6 +245,12 @@ if (-not $dotbotInstalled) {
         $dummyFile = Join-Path $botDir2 "workspace\tasks\todo\test-task.json"
         @{ id = "test-123"; name = "Dummy task" } | ConvertTo-Json | Set-Content -Path $dummyFile
 
+        # Create a dummy settings file in .control to verify preservation
+        $controlDir = Join-Path $botDir2 ".control"
+        if (-not (Test-Path $controlDir)) { New-Item -Path $controlDir -ItemType Directory -Force | Out-Null }
+        $dummySettings = Join-Path $controlDir "settings.json"
+        @{ anthropic_api_key = "sk-test-dummy" } | ConvertTo-Json | Set-Content -Path $dummySettings
+
         # Re-init with -Force
         Push-Location $testProject2
         & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") -Force 2>&1 | Out-Null
@@ -252,6 +258,7 @@ if (-not $dotbotInstalled) {
 
         Assert-PathExists -Name "-Force: .bot still exists" -Path $botDir2
         Assert-PathExists -Name "-Force: workspace task preserved" -Path $dummyFile
+        Assert-PathExists -Name "-Force: .control/settings.json preserved" -Path $dummySettings
         Assert-PathExists -Name "-Force: system files refreshed" -Path (Join-Path $botDir2 "systems\mcp\dotbot-mcp.ps1")
 
     } finally {

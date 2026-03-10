@@ -9,6 +9,8 @@ Extracted from server.ps1 for modularity.
 
 $script:Config = @{
     ControlDir = $null
+    LastConduit = $null
+    LastConduitTime = $null
 }
 
 function Initialize-AetherAPI {
@@ -21,6 +23,14 @@ function Initialize-AetherAPI {
 function Find-Conduit {
     $controlDir = $script:Config.ControlDir
 
+    # Check in-memory cache first (avoids re-scanning within 5 minutes)
+    if ($script:Config.LastConduit -and $script:Config.LastConduitTime) {
+        $age = (Get-Date) - $script:Config.LastConduitTime
+        if ($age.TotalMinutes -lt 5) {
+            return $script:Config.LastConduit
+        }
+    }
+
     # Method 0: Try last known IP from cached config (fastest)
     $configFile = Join-Path $controlDir "aether-config.json"
     if (Test-Path $configFile) {
@@ -29,10 +39,10 @@ function Find-Conduit {
             if ($cachedConfig.conduit) {
                 $response = Invoke-RestMethod -Uri "https://$($cachedConfig.conduit)/api/config" -TimeoutSec 2 -SkipCertificateCheck -ErrorAction Stop
                 if ($response.bridgeid) {
-                    return @{
-                        IP = $cachedConfig.conduit
-                        Id = $response.bridgeid
-                    }
+                    $result = @{ IP = $cachedConfig.conduit; Id = $response.bridgeid }
+                    $script:Config.LastConduit = $result
+                    $script:Config.LastConduitTime = Get-Date
+                    return $result
                 }
             }
         } catch {
@@ -44,10 +54,10 @@ function Find-Conduit {
     try {
         $discoveryResponse = Invoke-RestMethod -Uri "https://discovery.meethue.com/" -TimeoutSec 5 -ErrorAction Stop
         if ($discoveryResponse -and $discoveryResponse.Count -gt 0) {
-            return @{
-                IP = $discoveryResponse[0].internalipaddress
-                Id = $discoveryResponse[0].id
-            }
+            $result = @{ IP = $discoveryResponse[0].internalipaddress; Id = $discoveryResponse[0].id }
+            $script:Config.LastConduit = $result
+            $script:Config.LastConduitTime = Get-Date
+            return $result
         }
     } catch {
         # Discovery endpoint failed, try SSDP
@@ -92,10 +102,10 @@ ST: urn:schemas-upnp-org:device:basic:1
                     }
 
                     $udpClient.Close()
-                    return @{
-                        IP = $ip
-                        Id = $bridgeId
-                    }
+                    $result = @{ IP = $ip; Id = $bridgeId }
+                    $script:Config.LastConduit = $result
+                    $script:Config.LastConduitTime = Get-Date
+                    return $result
                 }
             } catch [System.Net.Sockets.SocketException] {
                 # Timeout - no more responses
@@ -124,15 +134,16 @@ ST: urn:schemas-upnp-org:device:basic:1
             }
             Start-Sleep -Seconds 2
             foreach ($kv in $tasks.GetEnumerator()) {
+                $connected = $kv.Value.Task.Status -eq "RanToCompletion"
                 try { $kv.Value.Client.Dispose() } catch {}
-                if ($kv.Value.Task.Status -eq "RanToCompletion") {
+                if ($connected) {
                     try {
                         $response = Invoke-RestMethod -Uri "https://$($kv.Key)/api/config" -SkipCertificateCheck -TimeoutSec 2 -ErrorAction Stop
                         if ($response.bridgeid) {
-                            return @{
-                                IP = $kv.Key
-                                Id = $response.bridgeid
-                            }
+                            $result = @{ IP = $kv.Key; Id = $response.bridgeid }
+                            $script:Config.LastConduit = $result
+                            $script:Config.LastConduitTime = Get-Date
+                            return $result
                         }
                     } catch {
                         # Not a Hue bridge

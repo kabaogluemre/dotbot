@@ -129,15 +129,17 @@ const Aether = (function() {
                 return { status: 'linked', conduit: _conduit };
             }
 
-            // IP may have changed - try discovery with existing token
+            // Verify failed — try discovery, then re-verify (IP may have changed)
             const discovered = await scan();
-            if (discovered && discovered.ip !== _conduit) {
-                // Found bridge at new IP - verify token still works there
-                _conduit = discovered.ip;
-                const validAtNewIp = await verifyLink();
-                if (validAtNewIp) {
+            if (discovered) {
+                if (discovered.ip !== _conduit) {
+                    _conduit = discovered.ip;
+                }
+                // Re-verify at discovered IP (handles both same-IP transient failure and IP change)
+                const validAtDiscoveredIp = await verifyLink();
+                if (validAtDiscoveredIp) {
                     _linked = true;
-                    await saveLink();  // Update cached IP
+                    await saveLink();
                     showNavItem(true);
                     startIdleBreathe();
                     return { status: 'linked', conduit: _conduit };

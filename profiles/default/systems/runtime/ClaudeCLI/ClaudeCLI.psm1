@@ -581,7 +581,7 @@ function Invoke-ClaudeStream {
     # Drain stderr line-by-line in a background task to prevent buffer deadlock.
     # Unlike ReadToEndAsync(), this avoids accumulating the full stderr in memory
     # and surfaces diagnostics when -ShowDebugJson is enabled.
-    $stderrDrain = [System.Threading.Tasks.Task]::Run({
+    $stderrDrain = [System.Threading.Tasks.Task]::Run([Action]{
         try {
             while (-not $claudeProc.HasExited) {
                 $line = $claudeProc.StandardError.ReadLine()

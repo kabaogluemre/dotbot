@@ -268,8 +268,6 @@ If all critical fields are resolved (either from Atlassian, the user's prompt, u
 ```markdown
 # Interview Summary
 
-Auto-resolved from Atlassian. See `briefing/jira-context.md` for full context.
-
 ## Resolution Method
 - **Source**: Atlassian MCP (Jira + Confluence)
 - **Jira Key**: {JIRA_KEY}
@@ -281,14 +279,22 @@ Auto-resolved from Atlassian. See `briefing/jira-context.md` for full context.
 ## Unresolved Fields
 {LIST_OF_REMAINING_UNRESOLVED_FIELDS_OR_NONE}
 
-## User Clarifications
-{SUMMARY_OF_QA_ROUNDS_IF_ANY}
-
 ## MCP Errors (if any)
 {LIST_OF_FAILED_MCP_CALLS_OR_NONE}
+
+## Clarification Log
+
+### Phase 0: Fetch Jira Context — Round 1
+| # | Question | Answer (verbatim) | Interpretation | Timestamp |
+|---|----------|--------------------|----------------|-----------|
+| q1 | {question text} | {user's verbatim answer} | {your interpretation of the answer and its implications} | {ISO timestamp} |
 ```
 
-If previous Q&A rounds occurred, include a **User Clarifications** section summarising each question and the user's verbatim answer with your interpretation.
+The **Clarification Log** section is an append-only log that spans all phases. Phase 0 writes the initial entries. Subsequent phases (01, 04, etc.) will append their own sections via the runtime when their questions are answered.
+
+If previous Q&A rounds occurred, include entries in the Clarification Log for each round (e.g., `### Phase 0: Fetch Jira Context — Round 1`, `### Phase 0: Fetch Jira Context — Round 2`).
+
+If no Q&A rounds occurred (auto-resolved cleanly), omit the Clarification Log section entirely.
 
 ### Graceful Degradation
 

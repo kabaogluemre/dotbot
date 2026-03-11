@@ -2372,6 +2372,13 @@ An interview-summary.md file exists in .bot/workspace/product/ containing the us
                 & $scriptPath -BotRoot $botRoot -Model $claudeModelName -ProcessId $procId
             } else {
                 # --- LLM phase ---
+
+                # Pre-phase cleanup: remove leftover clarification files from previous phases
+                $phaseQuestionsPath = Join-Path $productDir "clarification-questions.json"
+                $phaseAnswersPath = Join-Path $productDir "clarification-answers.json"
+                if (Test-Path $phaseQuestionsPath) { Remove-Item $phaseQuestionsPath -Force -ErrorAction SilentlyContinue }
+                if (Test-Path $phaseAnswersPath) { Remove-Item $phaseAnswersPath -Force -ErrorAction SilentlyContinue }
+
                 $wfContent = ""
                 $wfPath = Join-Path $botRoot "prompts\workflows\$($phase.workflow)"
                 if (Test-Path $wfPath) { $wfContent = Get-Content $wfPath -Raw }
@@ -2406,6 +2413,137 @@ IMPORTANT: If creating mission.md, it MUST begin with ## Executive Summary as th
                 if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
                 Invoke-ProviderStream @streamArgs
+
+                # --- Post-phase question detection (Generate → Ask → Adjust) ---
+                if (Test-Path $phaseQuestionsPath) {
+                    try {
+                        $phaseQData = (Get-Content $phaseQuestionsPath -Raw) | ConvertFrom-Json
+                    } catch {
+                        Write-Status "Failed to parse phase questions JSON: $($_.Exception.Message)" -Type Warn
+                        $phaseQData = $null
+                    }
+
+                    if ($phaseQData -and $phaseQData.questions -and $phaseQData.questions.Count -gt 0) {
+                        Write-Status "Phase $phaseNum ($phaseName): $($phaseQData.questions.Count) question(s) — waiting for user" -Type Info
+                        Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Phase $phaseNum has $($phaseQData.questions.Count) clarification question(s)"
+
+                        # 1. ASK — Set process to needs-input, poll for answers
+                        $processData.status = 'needs-input'
+                        $processData.pending_questions = $phaseQData
+                        $processData.heartbeat_status = "Waiting for answers (phase $phaseNum: $phaseName)"
+                        Write-ProcessFile -Id $procId -Data $processData
+
+                        if (Test-Path $phaseAnswersPath) { Remove-Item $phaseAnswersPath -Force }
+
+                        while (-not (Test-Path $phaseAnswersPath)) {
+                            if (Test-ProcessStopSignal -Id $procId) {
+                                Write-Status "Stop signal received waiting for phase answers" -Type Error
+                                $processData.status = 'stopped'
+                                $processData.failed_at = (Get-Date).ToUniversalTime().ToString("o")
+                                $processData.pending_questions = $null
+                                Write-ProcessFile -Id $procId -Data $processData
+                                throw "Process stopped by user during phase $phaseNum questions"
+                            }
+                            Start-Sleep -Seconds 2
+                        }
+
+                        # Read answers
+                        try {
+                            $phaseAnswersData = (Get-Content $phaseAnswersPath -Raw) | ConvertFrom-Json
+                        } catch {
+                            Write-Status "Failed to parse phase answers JSON: $($_.Exception.Message)" -Type Warn
+                            $phaseAnswersData = $null
+                        }
+
+                        # Check if user skipped
+                        if ($phaseAnswersData -and $phaseAnswersData.skipped -eq $true) {
+                            Write-Status "User skipped phase $phaseNum questions" -Type Info
+                            Write-ProcessActivity -Id $procId -ActivityType "text" -Message "User skipped phase $phaseNum questions"
+                        } elseif ($phaseAnswersData) {
+                            Write-Status "Answers received for phase $phaseNum" -Type Success
+                            Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Received answers for phase $phaseNum"
+
+                            # 2. RECORD — Append Q&A to interview-summary.md
+                            $summaryPath = Join-Path $productDir "interview-summary.md"
+                            $timestamp = (Get-Date).ToUniversalTime().ToString("o")
+                            $qaSection = "`n`n### Phase ${phaseNum}: $phaseName`n"
+                            $qaSection += "| # | Question | Answer (verbatim) | Interpretation | Timestamp |`n"
+                            $qaSection += "|---|----------|--------------------|----------------|-----------|`n"
+
+                            $qIdx = 0
+                            foreach ($ans in $phaseAnswersData.answers) {
+                                $qIdx++
+                                $qText = ($ans.question -replace '\|', '\|' -replace "`n", ' ')
+                                $aText = ($ans.answer -replace '\|', '\|' -replace "`n", ' ')
+                                $qaSection += "| q$qIdx | $qText | $aText | _pending_ | $timestamp |`n"
+                            }
+
+                            if (Test-Path $summaryPath) {
+                                # Append to existing file
+                                $existingContent = Get-Content $summaryPath -Raw
+                                if ($existingContent -notmatch '## Clarification Log') {
+                                    $qaSection = "`n## Clarification Log`n" + $qaSection
+                                }
+                                Add-Content -Path $summaryPath -Value $qaSection -NoNewline
+                            } else {
+                                # Create new summary with clarification log
+                                $newSummary = "# Interview Summary`n`n## Clarification Log`n" + $qaSection
+                                Set-Content -Path $summaryPath -Value $newSummary -NoNewline
+                            }
+
+                            # 3. ADJUST — Run holistic artifact correction pass
+                            $adjustPromptPath = Join-Path $botRoot "prompts\includes\adjust-after-answers.md"
+                            if (Test-Path $adjustPromptPath) {
+                                $adjustContent = Get-Content $adjustPromptPath -Raw
+
+                                $adjustPrompt = @"
+$adjustContent
+
+## Context
+
+- **Phase that generated questions**: Phase $phaseNum — $phaseName
+- **User's project description**: $Prompt
+$fileRefs
+$interviewContext
+
+Instructions:
+1. Read .bot/workspace/product/interview-summary.md for the full Q&A history including the new answers
+2. Read ALL existing product artifacts in .bot/workspace/product/
+3. Assess the impact of the new information across all artifacts
+4. Enrich/correct any affected artifacts
+5. Fill in the Interpretation column for the new Q&A entries in interview-summary.md
+"@
+
+                                Write-Status "Running post-answer adjustment for phase $phaseNum..." -Type Process
+                                Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Adjusting artifacts based on phase $phaseNum answers"
+
+                                $adjustSessionId = New-ProviderSession
+                                $adjustArgs = @{
+                                    Prompt = $adjustPrompt
+                                    Model = $claudeModelName
+                                    SessionId = $adjustSessionId
+                                    PersistSession = $false
+                                }
+                                if ($ShowDebug) { $adjustArgs['ShowDebugJson'] = $true }
+                                if ($ShowVerbose) { $adjustArgs['ShowVerbose'] = $true }
+
+                                Invoke-ProviderStream @adjustArgs
+
+                                Write-Status "Post-answer adjustment complete for phase $phaseNum" -Type Complete
+                            } else {
+                                Write-Status "Adjust prompt not found at $adjustPromptPath — skipping adjustment" -Type Warn
+                            }
+                        }
+
+                        # 4. CLEANUP — Remove JSON files, reset process status
+                        Remove-Item $phaseQuestionsPath -Force -ErrorAction SilentlyContinue
+                        Remove-Item $phaseAnswersPath -Force -ErrorAction SilentlyContinue
+                        $processData.status = 'running'
+                        $processData.pending_questions = $null
+                        $processData.heartbeat_status = "Running phase $phaseNum"
+                        Write-ProcessFile -Id $procId -Data $processData
+                    }
+                }
             }
 
             # --- Validation (skip for workflow/interview phase types) ---

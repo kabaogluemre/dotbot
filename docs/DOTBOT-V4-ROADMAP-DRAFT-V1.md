@@ -347,6 +347,16 @@ stateDiagram-v2
 
 ---
 
+### Phase 15: Aether Conduit Plugins
+
+> **Effort:** L | **Risk:** Medium | **Dependencies:** Phase 1, 4
+>
+> Unifies five mature IoT/console PowerShell modules (Hue, Pixoo, JBL PartyBox, Stream Deck, TextPrinter) under the Aether conduit abstraction in a new `dotbot-aether` add-in repo. Defines conduit type taxonomy (Ambient, Window, Sonic & Ambient, Console, Counter), standard interface contract, and event→action mappings. Replaces the single Hue-only Aether sink with a pluggable conduit loader that integrates with the Event Bus.
+>
+> **[Full specification →](DOTBOT-V4-phase-15-aether-conduit-plugins.md)**
+
+---
+
 ## Implementation Order
 
 | # | Phase | Effort | Risk | Dependencies |
@@ -365,6 +375,7 @@ stateDiagram-v2
 | 12 | Self-Improvement Loop | M | Medium | 1, 3, 4 |
 | 13 | Multi-Channel Q&A | L | Medium | 8 |
 | 14 | Project Team & Roles | M | Medium | 5, 13 |
+| 15 | Aether Conduit Plugins | L | Medium | 1, 4 |
 
 **Parallel tracks:**
 
@@ -397,7 +408,12 @@ graph LR
         P13 --> P14["Phase 14\nProject Team\n& Roles"]
     end
 
+    subgraph TrackF["Track F: Aether Conduits"]
+        P15["Phase 15\nAether Conduit\nPlugins"]
+    end
+
     P1 --> P4
+    P4 --> P15
     P6 --> P7
     P7 --> P10
     P8 --> P11
@@ -417,6 +433,7 @@ graph LR
 - **Phase 12 (Self-Improvement)** depends on Phase 1 (structured logs for analysis), Phase 3 (runtime integration for task completion trigger), and Phase 4 (event bus for improvement events)
 - **Phase 13 (Multi-Channel Q&A)** depends on Phase 8 (Mothership fleet management must exist for delivery infrastructure)
 - **Phase 14 (Project Team & Roles)** depends on Phase 5 (decisions — team drives stakeholder resolution) and Phase 13 (Q&A — team drives recipient routing)
+- **Phase 15 (Aether Conduit Plugins)** depends on Phase 1 (structured logging for conduit lifecycle) and Phase 4 (event bus — conduits subscribe to events as sinks)
 
 ---
 
@@ -523,8 +540,8 @@ The following ideas don't map to current roadmap phases but are worth preserving
 - **SSO integration (SAML/OIDC)** — Enterprise table-stakes but only relevant when the Dashboard has authentication, which it currently doesn't.
 - **Air-gapped mode** — Local model endpoints, no telemetry, self-contained profiles. Important for government/defense/finance but orthogonal to the current architecture work.
 - **Policy engine** — Rule-based guardrails ("never modify `*.secrets.*`", "require two approvals for production"). Powerful but needs Decision Records (Phase 5) and Team (Phase 14) foundations first.
-- **Observability suite** — AI cost dashboard, velocity metrics, quality tracking, token efficiency analysis, process timeline (Gantt), exportable PDF/HTML reports. These form a coherent group that could become Phase 15.
-- **Advanced kickstart variants** — Codebase migration, design doc → tasks, repository onboarding for new developers, competitive analysis, multi-repo initiative planning. Natural extensions of existing kickstart workflows; could become Phase 16.
+- **Observability suite** — AI cost dashboard, velocity metrics, quality tracking, token efficiency analysis, process timeline (Gantt), exportable PDF/HTML reports. These form a coherent group that could become Phase 16.
+- **Advanced kickstart variants** — Codebase migration, design doc → tasks, repository onboarding for new developers, competitive analysis, multi-repo initiative planning. Natural extensions of existing kickstart workflows; could become Phase 17.
 - **DX improvements** — Interactive kickstart wizard, task templates, hot-reload profiles, task preview/dry-run, conversational steering (multi-turn whisper). Quality-of-life items best addressed incrementally rather than as a single phase.
 - **External integrations** — Figma MCP, Serena MCP (symbol extraction), SonarQube quality gates, read-only database sources, Jira overlap detection, Azure DevOps branch rule discovery, Linear/Shortcut/Asana adapters, GitHub Issues sync. Each is self-contained; prioritize based on user demand.
 - **Content quality improvements** — Source references with inline links, avoid unexplained acronyms, use real-world data instead of placeholders, MFA stubs for external auth, pre-analyse project dependencies, tech decision research workflow, repository description file, meaningful output filenames. Mostly prompt engineering improvements that can be applied incrementally.
@@ -552,6 +569,7 @@ After each phase:
    - Phase 12: Self-improvement cycle generates suggestions, UI displays them, apply/reject works, counter resets
    - Phase 13: Slack/Discord/WhatsApp delivery works, attachments upload and render per channel, questionnaires collect batched responses
    - Phase 14: Team CRUD via MCP tools, role-based Q&A routing resolves correct recipients, availability/delegation works
+   - Phase 15: All enabled conduits discover and bond to hardware, event bus events trigger conduit-specific reactions, Counter prints accurate cost tallies
 
 ## Key Files Referenced
 

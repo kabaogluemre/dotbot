@@ -247,13 +247,15 @@ stateDiagram-v2
 
 ---
 
-### Phase 5: Rich Decision Records
+### Phase 5: Rich Decision Records ✅ Substantially Complete
 
 > **Effort:** S-M | **Risk:** Low | **Dependencies:** Phase 4 (for events)
 >
 > Structured decision JSON in `workspace/decisions/`, 5 MCP tools (`decision-create/list/get/update/link`), new Dashboard tab, integration with analysis/execution prompts.
 >
 > **[Full specification →](DOTBOT-V4-phase-05-decision-records.md)**
+>
+> **Status (PR #62, 2026-03-15):** ~90% complete. Decisions implemented as first-class entities with 7 MCP tools (create, get, list, update, mark-accepted, mark-deprecated, mark-superseded), full Dashboard tab, workflow integration (`01b-generate-decisions.md`), task analysis/execution prompt integration, and comprehensive tests. Storage uses `workspace/adrs/{proposed,accepted,deprecated,superseded}/` with status-based subdirectories. **Remaining gaps:** (1) `decision-link` standalone tool — currently handled via `decision-update`; (2) Event bus integration — deferred until Phase 4 ships; (3) Init-time directory creation — uses profile template gitkeep dirs instead of `dotbot init`.
 
 ---
 
@@ -365,7 +367,7 @@ stateDiagram-v2
 | 2 | TaskStore Abstraction | S | Low | None |
 | 3 | Break up launch-process.ps1 | L | Medium | 1, 2 |
 | 4 | Event Bus | M | Medium | 1 |
-| 5 | Rich Decision Records | S-M | Low | 4 (for events) |
+| 5 | Rich Decision Records ✅ | S-M | Low | 4 (for events) |
 | 6 | Restructure Profiles | M | Medium | None |
 | 7 | Workflows as Isolated Runs | L | High | 3, 6 |
 | 8 | Mothership Fleet Management | L | Medium | 4, 5 |
@@ -388,7 +390,7 @@ graph LR
     end
 
     subgraph TrackB["Track B: Events / Decisions / Fleet / Drones"]
-        P4["Phase 4\nEvent Bus"] --> P5["Phase 5\nDecisions"]
+        P4["Phase 4\nEvent Bus"] --> P5["Phase 5\nDecisions ✅"]
         P5 --> P8["Phase 8\nMothership\nFleet Mgmt"]
         P8 --> P10["Phase 10\nDrone Agent"]
     end

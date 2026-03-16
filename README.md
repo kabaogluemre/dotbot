@@ -1,14 +1,16 @@
 # dotbot-v3
 
-**Structured, auditable AI-assisted development for teams.**
+**AI-powered software development and human orchestrator for teams.**
 
 ![Overview](assets/overview.png)
 
 ## What is dotbot?
 
+Dotbot is an AI-powered software development and human orchestrator. It manages the lifecycle of business change: requirements, solutioning, planning, analysis, execution, verification, and delivery. It coordinates LLM-driven agents working in code repositories, manages their processes, tools, and prompts, and provides visibility into what they're doing. It is not an API gateway, a knowledge platform, or an infrastructure orchestration layer. It integrates well with tools that serve those purposes, but it does not try to replace them.
+
 Most AI coding tools give you a result but no record of how you got there — no trail of decisions for teammates to follow, no way to continue work across sessions, and no framework for managing large projects.
 
-dotbot wraps AI-assisted coding in a managed, transparent workflow where every step is tracked:
+Dotbot wraps AI-assisted coding in a managed, transparent workflow where every step is tracked:
 
 - **Plan first, then execute** — Product specs become task roadmaps. Each task gets pre-flight analysis before implementation. Decisions and rationale are documented as work happens.
 - **Two-phase execution** — Analysis resolves ambiguity, identifies files, and builds a context package. Implementation consumes that package and writes code. Tasks flow: `todo → analysing → analysed → in-progress → done`.

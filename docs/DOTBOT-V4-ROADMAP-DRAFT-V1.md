@@ -207,13 +207,31 @@ stateDiagram-v2
 
 ---
 
+## Extension Point Architecture
+
+The v4 core must expose explicit, documented extension points. This is not a phase — it is a design principle that permeates Phases 1-8. Every component should be built with these interfaces in mind so that enterprise deployments, third-party integrations, and community extensions can hook in without forking.
+
+| Extension Point | Delivered In | Purpose |
+|---|---|---|
+| `IAuthProvider` — authentication provider interface | Phase 8 | Pluggable identity (ships with `LocalhostAuthProvider` no-op and `OidcAuthProvider`). Enterprise deployments supply org-specific config (Entra tenants, Okta, etc.) |
+| `IEventSink` — event bus sink plugin | Phase 4 | External consumers subscribe to dotbot events (observability platforms, webhooks, content moderation filters) |
+| `IPolicyEvaluator` — pre/post hook for policy checks | Phase 3 | Evaluation points at pre-task, pre-LLM-call, post-LLM-response, pre-commit, pre-merge, pre-publish. Ships with a default pass-through; organizations supply policy YAML |
+| `IModelProvider` — LLM provider abstraction with gateway mode | Phase 8 | Extends existing ProviderCLI. Direct provider access for local dev; optional gateway routing for fleet-managed API keys, cost controls, and coordinated retries |
+| `IKnowledgeProvider` — knowledge retrieval interface | Phase 7 | Injection point for external knowledge (vector DB, graph DB, ontology files) into agent context during workflow execution |
+| `IConfigProvider` — hierarchical configuration | Phase 8 | Configuration override hierarchy: local → project → org → fleet. Settings schema versioning for fleet compatibility |
+| `IStorageProvider` — task/session/decision storage abstraction | Phase 2 | Pluggable storage backends (filesystem default, cloud-native alternatives) |
+
+All interfaces ship with working default implementations in the OSS core. The extension point is the interface contract, not the implementation.
+
+---
+
 ## Implementation Phases
 
-### Phase 1: Structured Logging Module (Foundation)
+### Phase 1: Structured Logging & Telemetry (Foundation)
 
 > **Effort:** S-M | **Risk:** Low | **Dependencies:** None
 >
-> Creates `DotBotLog.psm1` with structured JSONL logging, replaces all silent catch blocks, adds log rotation. Every subsequent phase benefits from proper logging. Must include correlation IDs that thread through the entire chain from task creation through LLM invocation to tool execution to final result, enabling end-to-end execution tracing. Must also log exact model version per invocation to surface version drift regressions via Phase 12.
+> Creates `DotBotLog.psm1` with structured JSONL logging, replaces all silent catch blocks, adds log rotation. Every subsequent phase benefits from proper logging. Must include correlation IDs that thread through the entire chain from task creation through LLM invocation to tool execution to final result, enabling end-to-end execution tracing. Must also log exact model version per invocation to surface version drift regressions via Phase 12. Includes OpenTelemetry-compatible structured telemetry emission (traces, metrics) so that any deployment can export to Datadog, Grafana, Azure Monitor, or other backends without code changes.
 >
 > **[Full specification →](DOTBOT-V4-phase-01-structured-logging.md)**
 
@@ -233,7 +251,7 @@ stateDiagram-v2
 
 > **Effort:** L | **Risk:** Medium | **Dependencies:** Phase 1, 2
 >
-> Decomposes the 2,924-line monolith into ~200-line dispatcher + `ProcessRegistry.psm1` + `TaskLoop.psm1` + per-type handler scripts (`Invoke-AnalysisProcess.ps1`, etc.).
+> Decomposes the 2,924-line monolith into ~200-line dispatcher + `ProcessRegistry.psm1` + `TaskLoop.psm1` + per-type handler scripts (`Invoke-AnalysisProcess.ps1`, etc.). Introduces `IPolicyEvaluator` hook points at six evaluation points in the task lifecycle: pre-task, pre-LLM-call, post-LLM-response, pre-commit, pre-merge, and pre-publish. Ships with a default pass-through evaluator; organizations supply policy definitions as YAML. Also includes configurable retry policies per provider with circuit breaker and coordinated backoff support.
 >
 > **[Full specification →](DOTBOT-V4-phase-03-launch-process-breakup.md)**
 
@@ -243,7 +261,7 @@ stateDiagram-v2
 
 > **Effort:** M | **Risk:** Medium | **Dependencies:** Phase 1
 >
-> Lightweight in-process pub/sub (`EventBus.psm1`) with plugin sinks (Aether, Webhooks, Mothership). Decouples event producers from consumers.
+> Lightweight in-process pub/sub (`EventBus.psm1`) with `IEventSink` plugin interface. Built-in sinks: Aether, Webhooks, Mothership, and a content moderation filter sink (input/output scanning pipeline for PII detection and policy compliance, with integration points for external moderation services such as Azure AI Content Safety). Decouples event producers from consumers. Any deployment can register additional sinks without code changes.
 >
 > **[Full specification →](DOTBOT-V4-phase-04-event-bus.md)**
 
@@ -275,7 +293,7 @@ stateDiagram-v2
 
 > **Effort:** L | **Risk:** High | **Dependencies:** Phase 3, 6
 >
-> `dotbot run` creates workflow run records, generates tasks per phase, isolates task queues per run. Adds `WorkflowRunner.psm1` and workflow MCP tools.
+> `dotbot run` creates workflow run records, generates tasks per phase, isolates task queues per run. Adds `WorkflowRunner.psm1` and workflow MCP tools. Workflow run state must be serializable and transportable — enterprise deployments need to move runs between outposts/drones and aggregate run history centrally. Includes `IKnowledgeProvider` interface for injecting external knowledge (vector DB results, ontology files, org-wide patterns) into agent context during workflow execution.
 >
 > **[Full specification →](DOTBOT-V4-phase-07-workflow-isolated-runs.md)**
 
@@ -285,7 +303,17 @@ stateDiagram-v2
 
 > **Effort:** L | **Risk:** Medium | **Dependencies:** Phase 4, 5
 >
-> Extends the .NET Mothership to full fleet management: instance registry, heartbeats, work queue for Drone dispatch, fleet dashboard, decision sync, event forwarding. Renames `NotificationClient` → `MothershipClient`. Includes centralized LLM provider configuration — API access, model selection, and credentials managed at fleet level rather than per-instance. Each Outpost and Drone inherits provider config from the Mothership. Also includes model catalog: capabilities metadata, pricing, and performance characteristics for all available models. For broader enterprise model governance, the catalog should sync with external registries (MLflow, Weights & Biases, etc.).
+> Extends the .NET Mothership to full fleet management: instance registry, heartbeats, work queue for Drone dispatch, fleet dashboard, decision sync, event forwarding. Renames `NotificationClient` → `MothershipClient`.
+>
+> **Authentication:** Implements `IAuthProvider` with OIDC support. Ships with `LocalhostAuthProvider` (no-op, current behavior) and `OidcAuthProvider` (SAML/OIDC for multi-user deployments, extending existing partial Entra support). Role-based access control for fleet operations. All Mothership API endpoints versioned (`/api/v1/...`) from day one.
+>
+> **Centralized provider configuration:** API access, model selection, and credentials managed at fleet level via `IConfigProvider` hierarchy (local → project → org → fleet). Each Outpost and Drone inherits provider config from the Mothership. Settings schema includes a version field for fleet compatibility.
+>
+> **Model catalog:** Capabilities metadata, pricing, performance characteristics, and lifecycle states for all available models. For broader enterprise model governance, the catalog syncs with external registries (MLflow, Weights & Biases, etc.).
+>
+> **Gateway routing mode:** Extends `IModelProvider` (ProviderCLI) with optional gateway mode — centralized API key management, request routing based on task type and cost constraints, usage metering. Direct provider access remains the default for local development; gateway mode is policy-controlled for fleet deployments.
+>
+> **Observability suite:** Fleet-wide AI cost dashboard, velocity metrics, quality tracking, token efficiency analysis, process timeline. Builds on Phase 1 structured telemetry. Exportable reports (PDF/HTML).
 >
 > **[Full specification →](DOTBOT-V4-phase-08-mothership-fleet.md)**
 
@@ -311,7 +339,7 @@ stateDiagram-v2
 
 ---
 
-### Phase 11: Enterprise Extension Registries
+### Phase 11: Extension Registries
 
 > **Effort:** M | **Risk:** Medium | **Dependencies:** Phase 6, 8 (for Mothership discovery)
 >
@@ -361,25 +389,11 @@ stateDiagram-v2
 
 ---
 
-### Phase 16: Enterprise Security & Observability (NEW)
-
-> **Effort:** L | **Risk:** Medium | **Dependencies:** Phase 4, 8, 14
->
-> Consolidates enterprise requirements promoted from parked ideas and enterprise client feedback. Three sub-phases:
->
-> **(16a) Authentication & access control** — SAML/OIDC integration for Dashboard and Mothership (extending existing partial Entra support). Role-based tool and skill access restrictions via the profile system. Session management and token handling.
->
-> **(16b) Security guardrails & content moderation** — Application-layer policy engine: file/path restrictions, permitted shell commands, approval gates, agent autonomy levels. Input/output filtering pipeline on the event bus for PII detection and policy compliance. Integration points for external moderation services (Azure AI Content Safety, AWS Comprehend) rather than a built-in detection engine.
->
-> **(16c) Observability suite** — Fleet-wide AI cost dashboard, velocity metrics, quality tracking, token efficiency analysis, process timeline (Gantt), exportable PDF/HTML reports. Structured telemetry emission for integration with Datadog/Grafana/Azure Monitor. Builds on Phase 8 Mothership and Phase 1 structured logging.
-
----
-
 ## Implementation Order
 
 | # | Phase | Effort | Risk | Dependencies |
 |---|-------|--------|------|--------------|
-| 1 | Structured Logging | S-M | Low | None |
+| 1 | Structured Logging & Telemetry | S-M | Low | None |
 | 2 | TaskStore Abstraction | S | Low | None |
 | 3 | Break up launch-process.ps1 | L | Medium | 1, 2 |
 | 4 | Event Bus | M | Medium | 1 |
@@ -389,12 +403,11 @@ stateDiagram-v2
 | 8 | Mothership Fleet Management | L | Medium | 4, 5 |
 | 9 | Additional improvements | S each | Low | 1-8 |
 | 10 | Drone Agent | L | High | 7, 8 |
-| 11 | Enterprise Extension Registries | M | Medium | 6, 8 (for Mothership discovery) |
+| 11 | Extension Registries | M | Medium | 6, 8 (for Mothership discovery) |
 | 12 | Self-Improvement Loop | M | Medium | 1, 3, 4 |
 | 13 | Multi-Channel Q&A | L | Medium | 8 |
 | 14 | Project Team & Roles | M | Medium | 5, 13 |
 | 15 | Aether Conduit Plugins | L | Medium | 1, 4 |
-| 16 | Enterprise Security & Observability | L | Medium | 4, 8, 14 |
 
 **Parallel tracks:**
 
@@ -412,9 +425,9 @@ graph LR
         P8 --> P10["Phase 10\nDrone Agent"]
     end
 
-    subgraph TrackC["Track C: Profiles + Enterprise"]
+    subgraph TrackC["Track C: Profiles + Extensions"]
         P6["Phase 6\nStacks vs\nWorkflows"]
-        P6 --> P11["Phase 11\nEnterprise\nRegistries"]
+        P6 --> P11["Phase 11\nExtension\nRegistries"]
     end
 
     subgraph TrackD["Track D: Polish + Self-Improvement"]
@@ -431,10 +444,6 @@ graph LR
         P15["Phase 15\nAether Conduit\nPlugins"]
     end
 
-    subgraph TrackG["Track G: Enterprise"]
-        P16["Phase 16\nEnterprise Security\n& Observability"]
-    end
-
     P1 --> P4
     P4 --> P15
     P6 --> P7
@@ -448,19 +457,15 @@ graph LR
     P4 --> P12
     P8 --> P13
     P5 --> P14
-    P4 --> P16
-    P8 --> P16
-    P14 --> P16
 ```
 
 **Key dependencies:**
 - **Phase 10 (Drones)** depends on Phase 7 (workflow runs), Phase 8 (Mothership fleet), and Phase 11 (registries — Drones need to resolve `myorg:workflow` references)
-- **Phase 11 (Enterprise Registries)** depends on Phase 6 (stacks/workflows separation must exist first) and Phase 8 (for optional Mothership discovery)
+- **Phase 11 (Extension Registries)** depends on Phase 6 (stacks/workflows separation must exist first) and Phase 8 (for optional Mothership discovery)
 - **Phase 12 (Self-Improvement)** depends on Phase 1 (structured logs for analysis), Phase 3 (runtime integration for task completion trigger), and Phase 4 (event bus for improvement events)
 - **Phase 13 (Multi-Channel Q&A)** depends on Phase 8 (Mothership fleet management must exist for delivery infrastructure)
 - **Phase 14 (Project Team & Roles)** depends on Phase 5 (decisions — team drives stakeholder resolution) and Phase 13 (Q&A — team drives recipient routing)
 - **Phase 15 (Aether Conduit Plugins)** depends on Phase 1 (structured logging for conduit lifecycle) and Phase 4 (event bus — conduits subscribe to events as sinks)
-- **Phase 16 (Enterprise Security & Observability)** depends on Phase 4 (event bus for content moderation pipeline), Phase 8 (Mothership for fleet-wide auth and observability), and Phase 14 (team/roles for role-based access control)
 
 ---
 
@@ -555,39 +560,34 @@ graph LR
 
 ---
 
-## Enterprise Requirements Mapping
+## Enterprise Client Requirements Mapping
 
-> Sourced from enterprise client feedback (IWG, 2026-03-16). 15 requirements assessed for scope fit, cross-organization applicability, and alignment with the v4 roadmap.
+> Sourced from enterprise client feedback (IWG, 2026-03-16). 15 requirements assessed for scope fit, cross-organization applicability, and alignment with the v4 roadmap. Following the principle that capability belongs in the OSS core and operation at scale is the enterprise value-add, most of these requirements are now addressed directly by core phases rather than a separate enterprise layer.
 
-### In scope — already covered by v4 roadmap
+### Addressed by core phases
 
-| Requirement | Roadmap Coverage |
+| Requirement | Core Phase |
 |---|---|
-| Centralized LLM configuration (fleet-level API access, credentials, model selection) | Phase 8 (Mothership fleet registry + centralized provider config). Phase 11 (enterprise registries). Existing `ProviderCLI.psm1` + `providers/*.json` pattern is the foundation. |
-| Dynamic retries and throttling (configurable backoff, visibility into retry state) | Phase 1 (structured logging for retry visibility). Phase 3 (runtime decomposition for configurable retry policies per provider). Existing retry logic in ProviderCLI to be made configurable. |
-| End-to-end execution tracing (correlation IDs across task → LLM → tool → result) | Phase 1 (structured JSONL logging with correlation IDs — added to spec). Phase 4 (event bus provides the event spine). Phase 9 (process telemetry). |
-| Decision audit trail (understanding LLM choices and reasoning paths) | Phase 5 (decision records — ~90% complete). Phase 12 (self-improvement loop analyses task outcomes and activity logs). Enhancement: capture LLM reasoning paths during execution, not just architectural decisions. |
-| Ecosystem-wide observability (fleet health, activity, errors across all instances) | Phase 8 (Mothership instance registry, heartbeats, activity streaming, error aggregation). Promoted observability suite to Phase 16. For infrastructure-level observability (container health, network, resources), integrate with Datadog/Grafana/Azure Monitor — dotbot emits structured telemetry, does not replicate these tools. |
-
-### In scope — pulled forward or added to roadmap
-
-| Requirement | Action |
-|---|---|
-| Authentication and access control (SAML/OIDC, tool/skill restrictions per user/role) | Promoted from parked ideas to Phase 16 (Enterprise Security & Observability). Any fleet deployment serving multiple users needs proper authentication. Dashboard and Mothership already handle Entra partially. Tool and skill access control extends the existing profile system. |
-| Security guardrails (tool execution boundaries, approval gates, autonomy restrictions) | Promoted from parked ideas to Phase 16. Dotbot enforces these as the process orchestrator: file/path restrictions, permitted shell commands, required approval gates, agent autonomy levels. Prompt injection defence remains primarily the LLM provider's responsibility; dotbot adds a validation layer on tool inputs and outputs. In containerized deployments, pod-level restrictions complement application-level guardrails. |
-| Content moderation and governance (PII detection, policy compliance, harmful content filtering) | Added to Phase 16. Dotbot runs input/output filters as an event bus pipeline step. For comprehensive moderation at scale, integrate with purpose-built tools (Azure AI Content Safety, AWS Comprehend, Protect AI Rebuff) as middleware rather than building a detection engine. |
-| Model catalog (source of truth for available models, capabilities, pricing, performance) | Added to Phase 8 (Mothership). Extends existing `providers/*.json` to a proper catalog with capabilities metadata. For broader enterprise model governance beyond dotbot, sync with external registries (MLflow Model Registry, Weights & Biases). |
-| Kubernetes deployment (containerized Drone architecture, autoscaling) | Added to Phase 10 (Drone Agent). Helm charts, horizontal pod autoscaling for Drones, health/readiness probes. Platform team owns the Kubernetes layer; dotbot provides container images and health endpoints. |
-| Enterprise GitHub / Azure DevOps integration (issue assignment, project management sync) | Phase 7 (workflow triggers from external systems). Issue #39 (Jira-initiated kickstart). Pattern: bidirectional sync — dotbot reads assignments from GitHub/Azure DevOps/Jira, writes progress back. Dotbot is a consumer of project management platforms, not a replacement. |
+| Centralized LLM configuration (fleet-level API access, credentials, model selection) | Phase 8 (`IConfigProvider` hierarchy + `IModelProvider` gateway mode). Phase 11 (extension registries). |
+| Dynamic retries and throttling (configurable backoff, visibility into retry state) | Phase 1 (structured telemetry for retry visibility). Phase 3 (`IPolicyEvaluator` + configurable retry policies with circuit breaker). |
+| End-to-end execution tracing (correlation IDs across task → LLM → tool → result) | Phase 1 (correlation IDs + OpenTelemetry traces). Phase 4 (event bus provides the event spine). |
+| Decision audit trail (understanding LLM choices and reasoning paths) | Phase 5 (decision records — ~90% complete). Phase 12 (self-improvement loop analyses task outcomes). Enhancement: capture LLM reasoning paths during execution, not just architectural decisions. |
+| Ecosystem-wide observability (fleet health, activity, errors across all instances) | Phase 8 (Mothership observability suite — cost dashboard, velocity metrics, quality tracking, telemetry export). For infrastructure-level observability (container health, network, resources), dotbot emits structured telemetry to Datadog/Grafana/Azure Monitor. |
+| Authentication and access control (SAML/OIDC, tool/skill restrictions per user/role) | Phase 8 (`IAuthProvider` with OIDC implementation). Any multi-user deployment needs this — it is core, not enterprise. |
+| Security guardrails (tool execution boundaries, approval gates, autonomy restrictions) | Phase 3 (`IPolicyEvaluator` hook points). Dotbot enforces file/path restrictions, permitted shell commands, approval gates, agent autonomy levels. Ships with pass-through default; organizations supply policy YAML. |
+| Content moderation and governance (PII detection, policy compliance, harmful content filtering) | Phase 4 (content moderation `IEventSink`). Integration points for external moderation services (Azure AI Content Safety, AWS Comprehend) rather than a built-in detection engine. |
+| Model catalog (source of truth for available models, capabilities, pricing, performance) | Phase 8 (Mothership model catalog). Syncs with external registries (MLflow, Weights & Biases) for broader governance. |
+| Kubernetes deployment (containerized Drone architecture, autoscaling) | Phase 10 (Drone Agent — Dockerfile, Helm charts, HPA, health probes). |
+| Enterprise GitHub / Azure DevOps integration (issue assignment, project management sync) | Phase 7 (workflow triggers). Bidirectional sync — dotbot reads assignments, writes progress back. Consumer of project management platforms, not a replacement. |
 
 ### Better served by purpose-built tools — dotbot provides integration points
 
 | Requirement | Recommendation |
 |---|---|
-| Shared memory / knowledge graphs (vector DB, cross-instance knowledge) | Dotbot produces structured data (task outcomes, decision records, activity logs, code analysis, transcripts) that should be emittable to an external knowledge platform. Tools like Qdrant, Weaviate, or Pinecone for vector search, or Neo4j for knowledge graphs, are purpose-built for this. Dotbot provides clean structured output hooks — it does not build a vector DB or knowledge graph engine. |
-| Model ephemerality and version drift (model behavior changes over time) | Dotbot logs exact model version per invocation (Phase 1) and surfaces regressions via the self-improvement loop (Phase 12). Controlling version drift is a provider-side and API gateway concern. Tools like LiteLLM, Portkey, or Azure API Management provide model version pinning, A/B routing, and fallback chains. Note: vendors and individual developers may use their own API tokens for some tasks — the architecture must accommodate mixed token ownership. |
-| Semantic caching (reduce model invocations via similarity matching) | Best handled at the API gateway layer between dotbot and LLM providers. GPTCache, LiteLLM caching, or Portkey cache handle similarity matching, invalidation, and cost tracking. The integration point is the ProviderCLI abstraction layer, where dotbot calls the LLM through a gateway that handles caching transparently. |
-| Business ontology / ubiquitous language (domain terms, KPIs, business glossary) | Important per-organization content, not a platform feature. Dotbot supports workspace-level documentation loaded into agent context. Formalize the convention: a standard `workspace/ontology/` location and format for glossary files that agents consume when working in repositories. The content is owned and maintained by the organization. |
+| Shared memory / knowledge graphs (vector DB, cross-instance knowledge) | Dotbot produces structured data (task outcomes, decision records, activity logs, transcripts) emittable to external knowledge platforms via `IKnowledgeProvider` (Phase 7). Tools like Qdrant, Weaviate, Pinecone, or Neo4j are purpose-built for this. Dotbot provides hooks, not an engine. |
+| Model ephemerality and version drift (model behavior changes over time) | Dotbot logs exact model version per invocation (Phase 1) and surfaces regressions via Phase 12. Controlling drift is a gateway concern — LiteLLM, Portkey, or Azure API Management provide version pinning and A/B routing. The `IModelProvider` gateway mode (Phase 8) integrates with such gateways. Note: architecture must accommodate mixed token ownership (org keys and individual developer keys). |
+| Semantic caching (reduce model invocations via similarity matching) | Best handled at the API gateway layer. GPTCache, LiteLLM caching, or Portkey cache handle similarity matching and invalidation. The `IModelProvider` gateway mode is the integration point — dotbot calls through a gateway that caches transparently. |
+| Business ontology / ubiquitous language (domain terms, KPIs, business glossary) | Per-organization content, not a platform feature. Formalized convention: `workspace/ontology/` for glossary files consumed by agents via `IKnowledgeProvider`. Content is owned and maintained by the organization. |
 
 ---
 
@@ -615,22 +615,21 @@ After each phase:
 1. `pwsh install.ps1`
 2. `pwsh tests/Run-Tests.ps1` (layers 1-3)
 3. Phase-specific checks:
-   - Phase 1: Structured JSONL in logs, no silent catches
+   - Phase 1: Structured JSONL in logs, no silent catches, OpenTelemetry traces emitting, correlation IDs threading through task→LLM→tool chain
    - Phase 2: Task state transitions atomic and validated
-   - Phase 3: All process types dispatch correctly
-   - Phase 4: Events published and sinks receive them
+   - Phase 3: All process types dispatch correctly, IPolicyEvaluator hooks invoked at all six evaluation points, retry policies configurable per provider
+   - Phase 4: Events published and sinks receive them, content moderation sink filters test PII data, IEventSink registration works for external sinks
    - Phase 5: Decisions CRUD + UI tab
    - Phase 6: `dotbot init --profile dotnet` works, workflows separate
-   - Phase 7: `dotbot run` creates isolated run with tasks
-   - Phase 8: Outpost registers with mothership, heartbeats flow
+   - Phase 7: `dotbot run` creates isolated run with tasks, IKnowledgeProvider injects external context, workflow state serializable
+   - Phase 8: Outpost registers with mothership, heartbeats flow, OIDC login works for Dashboard and Mothership, model catalog serves available models, gateway routing mode functional, observability dashboard shows fleet metrics, API versioned
    - Phase 9: `dotbot doctor` reports health
    - Phase 10: Drone registers, polls work, executes assignment, reports completion
-   - Phase 11: `dotbot registry add/list/update`, `dotbot init --profile myorg:stack`, `dotbot run myorg:workflow`
+   - Phase 11: `dotbot registry add/list/update`, `dotbot init --profile myorg:stack`, `dotbot run myorg:workflow` (extension registries)
    - Phase 12: Self-improvement cycle generates suggestions, UI displays them, apply/reject works, counter resets
    - Phase 13: Slack/Discord/WhatsApp delivery works, attachments upload and render per channel, questionnaires collect batched responses
    - Phase 14: Team CRUD via MCP tools, role-based Q&A routing resolves correct recipients, availability/delegation works
    - Phase 15: All enabled conduits discover and bond to hardware, event bus events trigger conduit-specific reactions, Counter prints accurate cost tallies
-   - Phase 16: OIDC login flow works for Dashboard and Mothership, role-based tool restrictions enforced, content moderation pipeline filters PII, observability dashboard shows fleet-wide metrics
 
 ## Key Files Referenced
 

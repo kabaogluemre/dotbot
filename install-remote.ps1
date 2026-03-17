@@ -1,20 +1,20 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Remote installer for dotbot
+    Remote installer for dotbot-v3
 
 .DESCRIPTION
     Downloads the latest release of dotbot and installs it globally.
-    Designed to be used with: irm https://raw.githubusercontent.com/andresharpe/dotbot/main/install-remote.ps1 | iex
+    Designed to be used with: irm https://raw.githubusercontent.com/andresharpe/dotbot-v3/main/install-remote.ps1 | iex
 
 .EXAMPLE
-    irm https://raw.githubusercontent.com/andresharpe/dotbot/main/install-remote.ps1 | iex
+    irm https://raw.githubusercontent.com/andresharpe/dotbot-v3/main/install-remote.ps1 | iex
 #>
 
 $ErrorActionPreference = "Stop"
 
 $RepoOwner = "andresharpe"
-$RepoName = "dotbot"
+$RepoName = "dotbot-v3"
 
 Write-Host ""
 Write-Host "=======================================================" -ForegroundColor Blue
@@ -106,7 +106,7 @@ try {
         tar -xzf $archivePath -C $extractDir
     }
 
-    # Find the extracted directory (should be dotbot-{version}/)
+    # Find the extracted directory (should be dotbot-v3-{version}/)
     $innerDir = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1
     if (-not $innerDir) {
         throw "Could not find extracted directory"

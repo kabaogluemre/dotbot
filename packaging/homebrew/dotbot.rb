@@ -1,7 +1,7 @@
 class Dotbot < Formula
   desc "Structured AI-assisted development framework with two-phase execution"
-  homepage "https://github.com/andresharpe/dotbot"
-  url "https://github.com/andresharpe/dotbot/releases/download/v3.1.0/dotbot-3.1.0.tar.gz"
+  homepage "https://github.com/andresharpe/dotbot-v3"
+  url "https://github.com/andresharpe/dotbot-v3/releases/download/v3.1.0/dotbot-v3-3.1.0.tar.gz"
   sha256 ""
   license "MIT"
   version "3.1.0"

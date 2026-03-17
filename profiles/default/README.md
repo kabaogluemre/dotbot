@@ -1,4 +1,4 @@
-# dotbot - Autonomous Development Framework
+# dotbot v3 - Autonomous Development Framework
 
 A project-agnostic framework for autonomous software development using Claude Code. Provides task management, two-phase execution (analysis + implementation), per-task git worktree isolation, a web dashboard, and a PowerShell MCP server.
 
@@ -6,7 +6,7 @@ A project-agnostic framework for autonomous software development using Claude Co
 
 ```bash
 cd ~
-git clone https://github.com/andresharpe/dotbot dotbot-install
+git clone https://github.com/andresharpe/dotbot-v3 dotbot-install
 cd dotbot-install
 pwsh install.ps1
 ```

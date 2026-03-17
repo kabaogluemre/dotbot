@@ -150,7 +150,7 @@ resource "local_file" "teams_manifest" {
     }
     description = {
       short = "Multi-choice question bot for development workflows"
-      full  = "Dotbot sends multi-choice questions to users via Teams and collects answers for the dotbot development workflow tool."
+      full  = "Dotbot sends multi-choice questions to users via Teams and collects answers for the dotbot-v3 development workflow tool."
     }
     icons = {
       outline = "outline.png"

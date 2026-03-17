@@ -16,8 +16,8 @@
     PrivateData = @{
         PSData = @{
             Tags = @('dotbot', 'AI', 'Claude', 'development-framework', 'automation', 'MCP', 'PowerShell')
-            LicenseUri = 'https://github.com/andresharpe/dotbot/blob/main/LICENSE'
-            ProjectUri = 'https://github.com/andresharpe/dotbot'
+            LicenseUri = 'https://github.com/andresharpe/dotbot-v3/blob/main/LICENSE'
+            ProjectUri = 'https://github.com/andresharpe/dotbot-v3'
             ReleaseNotes = 'Initial release — install via Install-Module dotbot -Scope CurrentUser'
         }
     }

@@ -651,8 +651,6 @@ function renderWorkflowDetailPanel(workflows) {
                 <span class="${ledClass}"></span>
                 <span class="wf-header-icon">${getIcon('accountTree', 14)}</span>
                 <span class="wf-header-name">${escapeHtml(wf.name)}</span>
-                <span class="wf-header-version">${escapeHtml(wf.version || '')}</span>
-                ${total > 0 ? `<span class="wf-header-progress">${done}/${total}</span>` : ''}
                 <div class="wf-header-actions">
                     <button class="ctrl-btn-xs primary" onclick="runWorkflow('${escapeHtml(wf.name)}')" ${isRunning ? 'disabled' : ''} title="Run">${getIcon('playArrow', 12)}</button>
                     <button class="ctrl-btn-xs" onclick="stopWorkflow('${escapeHtml(wf.name)}')" ${!isRunning ? 'disabled' : ''} title="Stop">${getIcon('stop', 12)}</button>
@@ -745,6 +743,7 @@ function renderWorkflowDetailPanel(workflows) {
                     if (authorName) html += `<div class="wf-meta-row"><span class="wf-meta-label">Author</span><span class="wf-meta-value">${escapeHtml(authorName)}</span></div>`;
                 }
                 if (wf.license) html += `<div class="wf-meta-row"><span class="wf-meta-label">License</span><span class="wf-meta-value">${escapeHtml(wf.license)}</span></div>`;
+                if (wf.tasks && wf.tasks.total > 0) html += `<div class="wf-meta-row"><span class="wf-meta-label">Tasks</span><span class="wf-meta-value">${wf.tasks.done}/${wf.tasks.total}</span></div>`;
                 html += '</div>';
             }
             if (wf.tags && wf.tags.length > 0) {

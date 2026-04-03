@@ -181,7 +181,6 @@ if ($permissionMode -and $providerConfig.permission_modes -and -not $providerCon
 if (-not $permissionMode -and $providerConfig.default_permission_mode) {
     $permissionMode = $providerConfig.default_permission_mode
 }
-$env:DOTBOT_PERMISSION_MODE = $permissionMode
 
 # Resolve model (parameter > settings > provider default)
 if (-not $Model) {

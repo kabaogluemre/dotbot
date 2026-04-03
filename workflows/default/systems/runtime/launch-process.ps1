@@ -166,6 +166,23 @@ if (Test-Path $uiSettingsPath) {
 # Load provider config
 $providerConfig = Get-ProviderConfig
 
+# Resolve permission mode (ui-settings > settings.default > provider default)
+$permissionMode = $null
+if ($uiSettings -and $uiSettings.permissionMode) {
+    $permissionMode = $uiSettings.permissionMode
+} elseif ($settings.permission_mode) {
+    $permissionMode = $settings.permission_mode
+}
+# Validate against provider config
+if ($permissionMode -and $providerConfig.permission_modes -and -not $providerConfig.permission_modes.$permissionMode) {
+    Write-Warning "Permission mode '$permissionMode' not valid for active provider. Using provider default."
+    $permissionMode = $null
+}
+if (-not $permissionMode -and $providerConfig.default_permission_mode) {
+    $permissionMode = $providerConfig.default_permission_mode
+}
+$env:DOTBOT_PERMISSION_MODE = $permissionMode
+
 # Resolve model (parameter > settings > provider default)
 if (-not $Model) {
     $Model = switch ($Type) {
@@ -181,6 +198,19 @@ try {
     Write-Warning "Model '$Model' not valid for active provider. Falling back to '$($providerConfig.default_model)'."
     $claudeModelName = Resolve-ProviderModelId -ModelAlias $providerConfig.default_model
 }
+# Validate model against permission mode restrictions (e.g. Haiku excluded in auto mode)
+if ($permissionMode -and $providerConfig.permission_modes -and $providerConfig.permission_modes.$permissionMode) {
+    $modeConfig = $providerConfig.permission_modes.$permissionMode
+    if ($modeConfig.restrictions -and $modeConfig.restrictions.excluded_models) {
+        $excluded = @($modeConfig.restrictions.excluded_models)
+        if ($Model -in $excluded) {
+            Write-Warning "Model '$Model' is not supported with permission mode '$permissionMode'. Remapping to '$($providerConfig.default_model)'."
+            $Model = $providerConfig.default_model
+            $claudeModelName = Resolve-ProviderModelId -ModelAlias $Model
+        }
+    }
+}
+
 $env:CLAUDE_MODEL = $claudeModelName
 $env:DOTBOT_MODEL = $claudeModelName
 
@@ -741,6 +771,7 @@ Review all context above. Decide whether to write clarification-questions.json (
         if ($ShowDebugJson) { $streamArgs['ShowDebugJson'] = $true }
         if ($ShowVerboseOutput) { $streamArgs['ShowVerbose'] = $true }
 
+        if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
         Invoke-ProviderStream @streamArgs
 
         # Check what Opus wrote
@@ -1364,7 +1395,8 @@ Do NOT implement the task. Your job is research and preparation only.
                     if ($ShowDebug) { $streamArgs['ShowDebugJson'] = $true }
                     if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
-                    Invoke-ProviderStream @streamArgs
+                    if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
+        Invoke-ProviderStream @streamArgs
                     $exitCode = 0
                 } catch {
                     Write-Status "Error: $($_.Exception.Message)" -Type Error
@@ -2109,7 +2141,8 @@ Do NOT implement the task. Your job is research and preparation only.
                     if ($ShowDebug) { $streamArgs['ShowDebugJson'] = $true }
                     if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
-                    Invoke-ProviderStream @streamArgs
+                    if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
+        Invoke-ProviderStream @streamArgs
                     $exitCode = 0
                 } catch {
                     Write-Status "Analysis error: $($_.Exception.Message)" -Type Error
@@ -2356,7 +2389,8 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
                     if ($ShowDebug) { $streamArgs['ShowDebugJson'] = $true }
                     if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
-                    Invoke-ProviderStream @streamArgs
+                    if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
+        Invoke-ProviderStream @streamArgs
                     $exitCode = 0
                 } catch {
                     Write-Status "Execution error: $($_.Exception.Message)" -Type Error
@@ -3013,7 +3047,8 @@ IMPORTANT: If creating mission.md, it MUST begin with ## Executive Summary as th
                 if ($ShowDebug) { $streamArgs['ShowDebugJson'] = $true }
                 if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
-                Invoke-ProviderStream @streamArgs
+                if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
+        Invoke-ProviderStream @streamArgs
 
                 # --- Post-phase question detection (Generate → Ask → Adjust) ---
                 if (Test-Path $phaseQuestionsPath) {
@@ -3200,6 +3235,7 @@ Instructions:
                                 if ($ShowDebug) { $adjustArgs['ShowDebugJson'] = $true }
                                 if ($ShowVerbose) { $adjustArgs['ShowVerbose'] = $true }
 
+                                if ($permissionMode) { $adjustArgs['PermissionMode'] = $permissionMode }
                                 Invoke-ProviderStream @adjustArgs
 
                                 Write-Status "Post-answer adjustment complete for phase $phaseNum" -Type Complete
@@ -3380,6 +3416,7 @@ $Prompt
         if ($ShowDebug) { $streamArgs['ShowDebugJson'] = $true }
         if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
+        if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
         Invoke-ProviderStream @streamArgs
 
         $processData.status = 'completed'

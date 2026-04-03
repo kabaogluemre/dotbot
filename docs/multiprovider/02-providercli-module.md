@@ -30,9 +30,13 @@ Validate that `ProviderCLI.psm1` loads correctly, all exported functions work, a
 - [ ] Throws on invalid alias for provider (e.g. "Opus" for codex)
 
 ### Build-ProviderCliArgs
-- [ ] Claude args include: `--model`, `--dangerously-skip-permissions`, `--output-format stream-json`, `--print`, `--verbose`, `-- <prompt>`
-- [ ] Codex args include: `exec`, `-m`, `--dangerously-bypass-approvals-and-sandbox`, `--json`, `-- <prompt>`
-- [ ] Gemini args include: `-m`, `-y`, `--output-format stream-json`, `-p <prompt>`
+- [ ] Accepts optional `$PermissionMode` parameter
+- [ ] When `$PermissionMode` is set and exists in `permission_modes`, uses that mode's `cli_args`
+- [ ] When `$PermissionMode` is not set, uses `default_permission_mode` from provider config
+- [ ] Falls back to `cli_args.permissions_bypass` when `permission_modes` is absent (backwards compat)
+- [ ] Claude args include: `--model`, permission mode args, `--output-format stream-json`, `--print`, `--verbose`, `-- <prompt>`
+- [ ] Codex args include: `exec`, `-m`, permission mode args, `--json`, `-- <prompt>`
+- [ ] Gemini args include: `-m`, permission mode args, `--output-format stream-json`, `-p <prompt>`
 - [ ] Session ID prepended for Claude, omitted for Codex/Gemini
 - [ ] `--no-session-persistence` added for Claude when `PersistSession=$false`
 

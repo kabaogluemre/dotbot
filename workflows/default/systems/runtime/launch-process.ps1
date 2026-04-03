@@ -1396,7 +1396,7 @@ Do NOT implement the task. Your job is research and preparation only.
                     if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
                     if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
-        Invoke-ProviderStream @streamArgs
+                    Invoke-ProviderStream @streamArgs
                     $exitCode = 0
                 } catch {
                     Write-Status "Error: $($_.Exception.Message)" -Type Error
@@ -2142,7 +2142,7 @@ Do NOT implement the task. Your job is research and preparation only.
                     if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
                     if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
-        Invoke-ProviderStream @streamArgs
+                    Invoke-ProviderStream @streamArgs
                     $exitCode = 0
                 } catch {
                     Write-Status "Analysis error: $($_.Exception.Message)" -Type Error
@@ -2390,7 +2390,7 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
                     if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
                     if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
-        Invoke-ProviderStream @streamArgs
+                    Invoke-ProviderStream @streamArgs
                     $exitCode = 0
                 } catch {
                     Write-Status "Execution error: $($_.Exception.Message)" -Type Error
@@ -3048,7 +3048,7 @@ IMPORTANT: If creating mission.md, it MUST begin with ## Executive Summary as th
                 if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
                 if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
-        Invoke-ProviderStream @streamArgs
+                Invoke-ProviderStream @streamArgs
 
                 # --- Post-phase question detection (Generate → Ask → Adjust) ---
                 if (Test-Path $phaseQuestionsPath) {

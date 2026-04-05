@@ -24,7 +24,9 @@ Shared infrastructure via directory junctions:
 #>
 
 # Import DotBotLog for structured logging
-Import-Module "$PSScriptRoot\DotBotLog.psm1" -Force -DisableNameChecking
+if (-not (Get-Module DotBotLog)) {
+    Import-Module "$PSScriptRoot\DotBotLog.psm1" -Force -DisableNameChecking
+}
 
 # --- Internal State ---
 $script:WorktreeMapPath = $null

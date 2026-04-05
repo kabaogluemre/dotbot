@@ -346,6 +346,10 @@ function Remove-ProcessLock {
     Remove-Item $lockPath -Force -ErrorAction SilentlyContinue
 }
 
+# Early-initialize variables used by the crash trap (must be set before trap registration)
+$procId = if ($ProcessId) { $ProcessId } else { New-ProcessId }
+$lockKey = if ($Slot -ge 0) { "$Type-$Slot" } else { $Type }
+
 function Test-Preflight {
     $checks = @()
     $allPassed = $true
@@ -541,14 +545,16 @@ function Get-NextWorkflowTask {
 # --- Crash Trap ---
 # Catch unexpected termination and persist process state before exit
 trap {
-    if ($procId -and $processData -and $processData.status -in @('running', 'starting')) {
+    if ((Test-Path variable:procId) -and $procId -and (Test-Path variable:processData) -and $processData -and $processData.status -in @('running', 'starting')) {
         $processData.status = 'stopped'
         $processData.failed_at = (Get-Date).ToUniversalTime().ToString("o")
         $processData.error = "Unexpected termination: $($_.Exception.Message)"
         try { Write-ProcessFile -Id $procId -Data $processData } catch { Write-BotLog -Level Debug -Message "Non-critical operation failed" -Exception $_ }
         try { Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Process terminated unexpectedly: $($_.Exception.Message)" } catch { Write-BotLog -Level Warn -Message "Failed to read process data" -Exception $_ }
     }
-    try { Remove-ProcessLock -LockType $lockKey } catch { Write-BotLog -Level Debug -Message "Logging operation failed" -Exception $_ }
+    if (Test-Path variable:lockKey) {
+        try { Remove-ProcessLock -LockType $lockKey } catch { Write-BotLog -Level Debug -Message "Logging operation failed" -Exception $_ }
+    }
 }
 
 # --- Preflight checks ---
@@ -562,7 +568,6 @@ if (-not $preflight.passed) {
 }
 
 # --- Single-instance guard (slot-aware) ---
-$lockKey = if ($Slot -ge 0) { "$Type-$Slot" } else { $Type }
 if (-not (Acquire-ProcessLock -LockType $lockKey)) {
     $lockPath = Join-Path $controlDir "launch-$lockKey.lock"
     $existingPid = if (Test-Path $lockPath) { (Get-Content $lockPath -Raw -ErrorAction SilentlyContinue)?.Trim() } else { "unknown" }
@@ -571,7 +576,6 @@ if (-not (Acquire-ProcessLock -LockType $lockKey)) {
 }
 
 # --- Initialize Process ---
-$procId = if ($ProcessId) { $ProcessId } else { New-ProcessId }
 $corrId = "corr-$([guid]::NewGuid().ToString().Substring(0,8))"
 $sessionId = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH-mm-ssZ")
 $claudeSessionId = New-ProviderSession

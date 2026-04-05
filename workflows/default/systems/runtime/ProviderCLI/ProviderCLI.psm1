@@ -11,7 +11,9 @@ and dispatches CLI invocations accordingly.
 #>
 
 # Import DotBotLog for structured logging
-Import-Module "$PSScriptRoot\..\modules\DotBotLog.psm1" -Force -DisableNameChecking
+if (-not (Get-Module DotBotLog)) {
+    Import-Module "$PSScriptRoot\..\modules\DotBotLog.psm1" -Force -DisableNameChecking
+}
 
 # Import DotBotTheme for consistent colors
 if (-not (Get-Module DotBotTheme)) {

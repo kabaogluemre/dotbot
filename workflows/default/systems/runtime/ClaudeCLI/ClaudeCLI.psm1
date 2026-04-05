@@ -10,7 +10,9 @@ $script:theme = Get-DotBotTheme
 Import-Module (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) "systems\mcp\modules\PathSanitizer.psm1") -Force
 
 # Import DotBotLog for structured logging
-Import-Module "$PSScriptRoot\..\modules\DotBotLog.psm1" -Force -DisableNameChecking
+if (-not (Get-Module DotBotLog)) {
+    Import-Module "$PSScriptRoot\..\modules\DotBotLog.psm1" -Force -DisableNameChecking
+}
 
 #region Helper Functions
 

@@ -561,7 +561,18 @@ function Get-ProviderProbe {
             } catch { Write-Verbose "Auth probe failed for codex: $_" }
         }
         'gemini' {
-            $result.accessible = [bool]($env:GEMINI_API_KEY -or $env:GOOGLE_API_KEY)
+            if ($env:GEMINI_API_KEY -or $env:GOOGLE_API_KEY) {
+                $result.accessible = $true
+            } else {
+                # Check for Google OAuth login
+                $googleAccountsFile = Join-Path $HOME ".gemini" "google_accounts.json"
+                if (Test-Path $googleAccountsFile) {
+                    try {
+                        $accounts = Get-Content $googleAccountsFile -Raw | ConvertFrom-Json
+                        $result.accessible = [bool]$accounts.active
+                    } catch { Write-Verbose "Gemini OAuth check failed: $_" }
+                }
+            }
         }
         default {
             # For unknown providers, assume accessible if installed

@@ -85,10 +85,10 @@ function Reset-InProgressTasks {
                 file = $taskFile.Name
             }
         } catch {
-            Write-Warning "Error processing task: $($taskFile.Name) - $($_.Exception.Message)"
+            Write-BotLog -Level Warn -Message "Error processing task: $($taskFile.Name)" -Exception $_
         }
     }
-    
+
     return $resetTasks
 }
 
@@ -168,7 +168,7 @@ function Reset-SkippedTasks {
                 skip_count = ($taskContent.skip_history | Measure-Object).Count
             }
         } catch {
-            Write-Warning "Error processing skipped task: $($taskFile.Name) - $($_.Exception.Message)"
+            Write-BotLog -Level Warn -Message "Error processing skipped task: $($taskFile.Name)" -Exception $_
         }
     }
 
@@ -235,7 +235,8 @@ function Reset-AnalysingTasks {
                         Get-Process -Id $proc.pid -ErrorAction Stop | Out-Null
                         $isAlive = $true
                     } catch {
-                        # PID not found - process is dead
+                        # PID not found - process is dead (expected for completed processes)
+                        Write-BotLog -Level Debug -Message "PID $($proc.pid) not found during stale task check" -Exception $_
                     }
                 }
 
@@ -243,7 +244,7 @@ function Reset-AnalysingTasks {
                     [void]$liveTaskIds.Add($proc.task_id)
                 }
             } catch {
-                # Skip malformed process files
+                Write-BotLog -Level Debug -Message "Skipping malformed process file" -Exception $_
             }
         }
     }
@@ -323,7 +324,7 @@ function Reset-AnalysingTasks {
                 file = $taskFile.Name
             }
         } catch {
-            Write-Warning "Error processing analysing task: $($taskFile.Name) - $($_.Exception.Message)"
+            Write-BotLog -Level Warn -Message "Error processing analysing task: $($taskFile.Name)" -Exception $_
         }
     }
 

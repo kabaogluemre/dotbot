@@ -80,7 +80,7 @@ if (Test-Path $uiPortFile) {
                 }
             }
         } catch {
-            # Server not responding — stale port file, continue with fresh start
+            Write-Verbose "Server not responding on stale port — continuing with fresh start: $($_.Exception.Message)"
         }
     }
 }

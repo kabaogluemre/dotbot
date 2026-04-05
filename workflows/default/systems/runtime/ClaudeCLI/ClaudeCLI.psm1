@@ -9,6 +9,9 @@ $script:theme = Get-DotBotTheme
 # Import PathSanitizer for stripping absolute paths from activity log messages
 Import-Module (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) "systems\mcp\modules\PathSanitizer.psm1") -Force
 
+# Import DotBotLog for structured logging
+Import-Module "$PSScriptRoot\..\modules\DotBotLog.psm1" -Force -DisableNameChecking
+
 #region Helper Functions
 
 function Get-Timestamp {
@@ -41,74 +44,11 @@ function Write-ActivityLog {
         [string]$Phase  # Optional: 'analysis' or 'execution'. Falls back to $env:DOTBOT_CURRENT_PHASE
     )
 
-    # Ensure .control directory exists (.bot/.control - ClaudeCLI is at .bot/systems/runtime/ClaudeCLI)
-    $controlDir = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) ".control"
-    if (-not (Test-Path $controlDir)) {
-        New-Item -Path $controlDir -ItemType Directory -Force | Out-Null
-    }
-
-    # Determine phase: parameter > environment variable > null (for backward compatibility)
-    $effectivePhase = if ($Phase) { $Phase } elseif ($env:DOTBOT_CURRENT_PHASE) { $env:DOTBOT_CURRENT_PHASE } else { $null }
-
-    # Sanitize absolute paths from message before persisting
-    $sanitizedMessage = Remove-AbsolutePaths -Text $Message -ProjectRoot $global:DotbotProjectRoot
-
-    $event = @{
-        timestamp = (Get-Date).ToUniversalTime().ToString("o")
-        type = $Type
-        message = $sanitizedMessage
-        task_id = $env:DOTBOT_CURRENT_TASK_ID  # Always include, null when no task
-        phase = $effectivePhase  # Include phase for filtering (null for backward compat)
-    } | ConvertTo-Json -Compress
-
-    # Write to global activity.jsonl (always, for oscilloscope / backward compat)
-    $logPath = Join-Path $controlDir "activity.jsonl"
-    $maxRetries = 3
-    for ($r = 0; $r -lt $maxRetries; $r++) {
-        try {
-            $fs = [System.IO.FileStream]::new(
-                $logPath,
-                [System.IO.FileMode]::Append,
-                [System.IO.FileAccess]::Write,
-                [System.IO.FileShare]::ReadWrite
-            )
-            $sw = [System.IO.StreamWriter]::new($fs, [System.Text.Encoding]::UTF8)
-            $sw.WriteLine($event)
-            $sw.Close()
-            $fs.Close()
-            break
-        } catch {
-            if ($r -lt ($maxRetries - 1)) {
-                Start-Sleep -Milliseconds (50 * ($r + 1))
-            }
-            # Final retry failure is silently ignored (non-critical logging)
-        }
-    }
-
-    # Also write to per-process activity log when DOTBOT_PROCESS_ID is set
-    $procId = $env:DOTBOT_PROCESS_ID
-    if ($procId) {
-        $processLogPath = Join-Path $controlDir "processes\$procId.activity.jsonl"
-        for ($r = 0; $r -lt $maxRetries; $r++) {
-            try {
-                $fs = [System.IO.FileStream]::new(
-                    $processLogPath,
-                    [System.IO.FileMode]::Append,
-                    [System.IO.FileAccess]::Write,
-                    [System.IO.FileShare]::ReadWrite
-                )
-                $sw = [System.IO.StreamWriter]::new($fs, [System.Text.Encoding]::UTF8)
-                $sw.WriteLine($event)
-                $sw.Close()
-                $fs.Close()
-                break
-            } catch {
-                if ($r -lt ($maxRetries - 1)) {
-                    Start-Sleep -Milliseconds (50 * ($r + 1))
-                }
-            }
-        }
-    }
+    # Delegates to DotBotLog — Write-BotLog handles .control dir creation, activity.jsonl,
+    # per-process logs, path sanitization, and FileStream retry logic.
+    $ctx = @{ activity_type = $Type }
+    if ($Phase) { $ctx.phase_override = $Phase }
+    Write-BotLog -Level Info -Message $Message -Context $ctx
 }
 
 function Write-ClaudeLog {
@@ -138,7 +78,7 @@ function Write-ClaudeLog {
     try {
         Write-ActivityLog -Type $Kind -Message $Message
     } catch {
-        # Silently ignore logging errors
+        Write-BotLog -Level Debug -Message "Activity logging failed" -Exception $_
     }
 }
 
@@ -606,7 +546,7 @@ function Invoke-ClaudeStream {
                 }
             }
         } catch {
-            # Ignore errors from reading stderr after process exit
+            Write-BotLog -Level Debug -Message "Error reading stderr after process exit" -Exception $_
         }
     })
 
@@ -1066,13 +1006,11 @@ function Invoke-ClaudeStream {
                 }
             }
         } catch {
-            # Silently catch and continue on any processing errors
-            # to prevent the entire stream from crashing
+            Write-BotLog -Level Debug -Message "Error processing stream event" -Exception $_
             if ($ShowDebugJson) {
                 [Console]::Error.WriteLine("$($t.Amber)[DEBUG] Error processing event: $($_.Exception.Message)$($t.Reset)")
                 [Console]::Error.Flush()
             }
-            Write-Debug "Error processing stream event: $($_.Exception.Message)"
         }
     }
 
@@ -1106,7 +1044,7 @@ function Invoke-ClaudeStream {
             # Cancel any outstanding async read before breaking to avoid
             # an unobserved task holding a reference to the disposed stream
             if ($pendingReadTask) {
-                try { $claudeProc.StandardOutput.Close() } catch { Write-Verbose "Cleanup: failed to close stdout stream: $_" }
+                try { $claudeProc.StandardOutput.Close() } catch { Write-BotLog -Level Debug -Message "Cleanup: failed to close stdout stream" -Exception $_ }
                 $pendingReadTask = $null
             }
             break
@@ -1173,11 +1111,11 @@ function Invoke-ClaudeStream {
             $children = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
                 Where-Object { $_.ParentProcessId -eq $claudePid -and $_.ProcessId -ne $PID }
             foreach ($child in $children) {
-                try { Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue } catch { Write-Verbose "Cleanup: failed to stop child process $($child.ProcessId): $_" }
+                try { Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue } catch { Write-BotLog -Level Debug -Message "Cleanup: failed to stop child process $($child.ProcessId)" -Exception $_ }
             }
         } else {
             # On Linux/macOS, use pkill to kill children by parent PID
-            try { & pkill -P $claudePid 2>/dev/null } catch { Write-Verbose "Cleanup: pkill failed for parent PID ${claudePid}: $_" }
+            try { & pkill -P $claudePid 2>/dev/null } catch { Write-BotLog -Level Debug -Message "Cleanup: pkill failed for parent PID ${claudePid}" -Exception $_ }
         }
     } catch {
         # Best-effort cleanup - don't fail the stream on cleanup errors
@@ -1193,10 +1131,10 @@ function Invoke-ClaudeStream {
 
         # Ensure process is disposed
         if ($claudeProc -and -not $claudeProc.HasExited) {
-            try { $claudeProc.Kill($true) } catch { Write-Verbose "Cleanup: failed to kill process: $_" }
+            try { $claudeProc.Kill($true) } catch { Write-BotLog -Level Debug -Message "Cleanup: failed to kill process" -Exception $_ }
         }
         if ($claudeProc) {
-            try { $claudeProc.Dispose() } catch { Write-Verbose "Cleanup: failed to dispose process: $_" }
+            try { $claudeProc.Dispose() } catch { Write-BotLog -Level Debug -Message "Cleanup: failed to dispose process" -Exception $_ }
         }
     }
 }

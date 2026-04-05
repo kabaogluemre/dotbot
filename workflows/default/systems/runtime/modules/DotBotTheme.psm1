@@ -2,6 +2,11 @@
 # Oscilloscope aesthetic with configurable color themes
 # Reads selected theme from ui-settings.json, colors from theme-config.json
 
+# Import DotBotLog for structured logging (conditional to avoid circular import)
+if (-not (Get-Module DotBotLog)) {
+    Import-Module "$PSScriptRoot\DotBotLog.psm1" -Force -DisableNameChecking -ErrorAction SilentlyContinue
+}
+
 # Track last modification time to avoid unnecessary re-reads
 $script:LastThemeCheckTime = $null
 $script:LastThemeFileTime = $null
@@ -952,7 +957,7 @@ function Get-DotBotVersion {
             try {
                 $v = (Get-Content $candidate -Raw | ConvertFrom-Json).version
                 if ($v) { $env:DOTBOT_VERSION = $v; return $v }
-            } catch { Write-Verbose "Failed to parse data: $_" }
+            } catch { if (Get-Command Write-BotLog -ErrorAction SilentlyContinue) { Write-BotLog -Level Debug -Message "Failed to parse version data" -Exception $_ } }
         }
         $searchDir = Split-Path $searchDir -Parent
         if (-not $searchDir) { break }

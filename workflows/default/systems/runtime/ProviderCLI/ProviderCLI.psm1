@@ -10,6 +10,9 @@ Loads declarative provider config from workflows/default/settings/providers/{nam
 and dispatches CLI invocations accordingly.
 #>
 
+# Import DotBotLog for structured logging
+Import-Module "$PSScriptRoot\..\modules\DotBotLog.psm1" -Force -DisableNameChecking
+
 # Import DotBotTheme for consistent colors
 if (-not (Get-Module DotBotTheme)) {
     Import-Module "$PSScriptRoot\..\modules\DotBotTheme.psm1" -Force
@@ -41,7 +44,7 @@ function Get-ProviderConfig {
         $settingsPath = Join-Path $botRoot "settings\settings.default.json"
         $settings = @{ provider = 'claude' }
         if (Test-Path $settingsPath) {
-            try { $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json } catch { Write-Verbose "Settings operation failed: $_" }
+            try { $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json } catch { Write-BotLog -Level Debug -Message "Settings operation failed" -Exception $_ }
         }
 
         # Check user override
@@ -50,7 +53,7 @@ function Get-ProviderConfig {
             try {
                 $override = Get-Content $controlSettings -Raw | ConvertFrom-Json
                 if ($override.provider) { $settings = @{ provider = $override.provider } }
-            } catch { Write-Verbose "Failed to parse data: $_" }
+            } catch { Write-BotLog -Level Debug -Message "Failed to parse data" -Exception $_ }
         }
 
         $Name = if ($settings.provider) { $settings.provider } else { 'claude' }

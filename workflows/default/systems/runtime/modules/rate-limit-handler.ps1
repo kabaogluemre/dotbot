@@ -182,7 +182,7 @@ function Wait-ForRateLimitReset {
             }
         }
     } catch {
-        # Silently ignore logging errors
+        Write-BotLog -Level Debug -Message "Rate limit logging failed" -Exception $_
     }
     
     $startTime = Get-Date

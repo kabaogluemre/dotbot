@@ -23,6 +23,9 @@ Shared infrastructure via directory junctions:
   .bot/settings/          -> settings defaults
 #>
 
+# Import DotBotLog for structured logging
+Import-Module "$PSScriptRoot\DotBotLog.psm1" -Force -DisableNameChecking
+
 # --- Internal State ---
 $script:WorktreeMapPath = $null
 
@@ -297,7 +300,7 @@ function Stop-WorktreeProcesses {
                 try {
                     Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
                     $killed++
-                } catch { Write-Verbose "Cleanup: failed to stop process $($proc.ProcessId): $_" }
+                } catch { Write-BotLog -Level Debug -Message "Cleanup: failed to stop process $($proc.ProcessId)" -Exception $_ }
             }
         } else {
             # On Linux/macOS, use ps to find processes by command line
@@ -313,7 +316,7 @@ function Stop-WorktreeProcesses {
                             try {
                                 Stop-Process -Id $procPid -Force -ErrorAction Stop
                                 $killed++
-                            } catch { Write-Verbose "Cleanup: failed to stop process ${procPid}: $_" }
+                            } catch { Write-BotLog -Level Debug -Message "Cleanup: failed to stop process ${procPid}" -Exception $_ }
                         }
                     }
                 }
@@ -406,7 +409,7 @@ function Remove-Junctions {
                 try {
                     [System.IO.Directory]::Delete($jp, $false)
                 } catch {
-                    # Last resort failed — record it
+                    Write-BotLog -Level Debug -Message "Last-resort junction removal failed for $jp" -Exception $_
                 }
             }
 
@@ -701,7 +704,7 @@ function Complete-TaskWorktree {
             foreach ($bf in $backupFiles) {
                 try {
                     $taskBackup["$subDir/$($bf.Name)"] = Get-Content $bf.FullName -Raw
-                } catch { Write-Verbose "Failed to read task backup $($bf.FullName): $_" }
+                } catch { Write-BotLog -Level Debug -Message "Failed to read task backup $($bf.FullName)" -Exception $_ }
             }
         }
 
@@ -1012,7 +1015,7 @@ function Copy-BuildArtifacts {
                 Copy-Item -Path $sourcePath -Destination $destPath -Force
             }
         } catch {
-            # Non-critical — skip files that can't be copied
+            Write-BotLog -Level Debug -Message "Non-critical: could not copy $sourcePath" -Exception $_
         }
     }
 }
@@ -1051,7 +1054,7 @@ function Remove-OrphanWorktrees {
                         $isActive = $true
                         break
                     }
-                } catch { Write-Verbose "Failed to read task file $($f.FullName): $_" }
+                } catch { Write-BotLog -Level Debug -Message "Failed to read task file $($f.FullName)" -Exception $_ }
             }
             if ($isActive) { break }
         }

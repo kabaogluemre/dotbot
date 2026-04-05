@@ -7,6 +7,10 @@ Shared functions used by init-project.ps1, workflow-add.ps1, workflow-run.ps1,
 and launch-process.ps1 for the multi-workflow system.
 #>
 
+if (-not (Get-Module DotBotLog)) {
+    Import-Module "$PSScriptRoot\DotBotLog.psm1" -Force -DisableNameChecking -ErrorAction SilentlyContinue
+}
+
 function Read-WorkflowManifest {
     <#
     .SYNOPSIS
@@ -407,6 +411,7 @@ function Merge-McpServers {
                 $mcpConfig | Add-Member -NotePropertyName 'mcpServers' -NotePropertyValue ([ordered]@{}) -Force
             }
         } catch {
+            Write-BotLog -Level Debug -Message "Failed to read MCP config" -Exception $_
             $mcpConfig = @{ mcpServers = [ordered]@{} }
         }
     }
@@ -587,7 +592,7 @@ function Clear-WorkflowTasks {
                     Remove-Item $_.FullName -Force
                     $removed++
                 }
-            } catch { Write-Verbose "Cleanup: failed to remove item: $_" }
+            } catch { Write-BotLog -Level Debug -Message "Cleanup: failed to remove item" -Exception $_ }
         }
     }
 

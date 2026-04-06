@@ -149,17 +149,29 @@ function Wait-ForServerReady {
 function Stop-ServerOnPort {
     <#
     .SYNOPSIS
-        Find and kill the server process listening on a given port.
+        Find and kill the server process listening on a given port (cross-platform).
     #>
     param([int]$Port)
     if ($Port -le 0) { return }
     try {
-        $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-        if ($conn) {
-            $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
-            if ($proc) {
-                $proc.Kill()
-                $proc.WaitForExit(3000) | Out-Null
+        if ($IsWindows) {
+            $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+            if ($conn) {
+                $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+                if ($proc) {
+                    $proc.Kill()
+                    $proc.WaitForExit(3000) | Out-Null
+                }
+            }
+        } else {
+            # macOS/Linux: use lsof to find the process listening on the port
+            $lsofOutput = & lsof -ti "tcp:$Port" 2>/dev/null
+            if ($lsofOutput) {
+                foreach ($pid in ($lsofOutput -split "`n")) {
+                    if ($pid -match '^\d+$') {
+                        & kill $pid 2>/dev/null
+                    }
+                }
             }
         }
     } catch {

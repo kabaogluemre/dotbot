@@ -42,5 +42,16 @@
     "poll_interval_seconds": 30,
     "sync_tasks": true,
     "sync_questions": true
+  },
+  "file_listener": {
+    "enabled": false,
+    "watchers": [
+      {
+        "folder": "product/briefing",
+        "filter": "*",
+        "events": ["created"],
+        "description": "New document in product briefing"
+      }
+    ]
   }
 }

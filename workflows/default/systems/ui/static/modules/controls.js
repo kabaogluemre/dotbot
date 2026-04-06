@@ -418,17 +418,15 @@ async function launchProcessFromOverview(type) {
 
 /**
  * Render per-workflow control rows from installed workflows data.
- * The generic workflow Start/Stop/Kill row remains visible for executing tasks.
+ * The generic workflow control row is hidden; per-workflow controls replace it.
  * @param {Array} workflows - Array of workflow objects from /api/workflows/installed
  */
 function renderWorkflowControls(workflows) {
     const container = document.getElementById('workflow-controls-container');
-    const genericRow = document.getElementById('generic-workflow-control');
     if (!container) return;
 
     if (!workflows || workflows.length === 0) {
         container.innerHTML = '';
-        if (genericRow) genericRow.style.display = '';
         return;
     }
 

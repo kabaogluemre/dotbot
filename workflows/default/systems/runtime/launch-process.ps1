@@ -258,7 +258,7 @@ trap {
         $processData.failed_at = (Get-Date).ToUniversalTime().ToString("o")
         $processData.error = "Unexpected termination: $($_.Exception.Message)"
         try { Write-ProcessFile -Id $procId -Data $processData } catch { Write-BotLog -Level Debug -Message "Non-critical operation failed" -Exception $_ }
-        try { Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Process terminated unexpectedly: $($_.Exception.Message)" } catch { Write-BotLog -Level Warn -Message "Failed to read process data" -Exception $_ }
+        try { Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Process terminated unexpectedly: $($_.Exception.Message)" } catch { Write-BotLog -Level Warn -Message "Failed to write process activity" -Exception $_ }
     }
     if (Test-Path variable:lockKey) {
         try { Remove-ProcessLock -LockType $lockKey } catch { Write-BotLog -Level Debug -Message "Logging operation failed" -Exception $_ }

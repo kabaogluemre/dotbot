@@ -16,12 +16,11 @@ work (where module functions are fully accessible).
 #>
 
 # Module-scope state
-$script:Watchers          = @()                                                            # System.IO.FileSystemWatcher instances
-$script:PendingEvents     = [System.Collections.Concurrent.ConcurrentQueue[object]]::new() # thread-safe event queue
-$script:ProcessingTimer   = $null                                                          # System.Threading.Timer
-$script:RecentlyProcessed = @{}                                                            # filePath → [DateTime] for debounce
-$script:BotRoot           = $null
-$script:WorkspaceRoot     = $null
+$script:Watchers      = @()                                                            # System.IO.FileSystemWatcher instances
+$script:PendingEvents = [System.Collections.Concurrent.ConcurrentQueue[object]]::new() # thread-safe event queue; shared with worker runspace
+$script:WorkerPS      = $null                                                          # [powershell] instance running the drain loop
+$script:BotRoot       = $null
+$script:WorkspaceRoot = $null
 
 function Initialize-InboxWatcher {
     param(
@@ -33,7 +32,7 @@ function Initialize-InboxWatcher {
     $script:WorkspaceRoot = Join-Path $BotRoot "workspace"
 
     # Read file_listener config from settings
-    $settingsPath = Join-Path $BotRoot "defaults\settings.default.json"
+    $settingsPath = Join-Path $BotRoot "settings\settings.default.json"
     if (-not (Test-Path $settingsPath)) {
         Write-Verbose "[InboxWatcher] settings.default.json not found, skipping"
         return
@@ -84,23 +83,27 @@ function Initialize-InboxWatcher {
             $watcher.InternalBufferSize = 65536
             $watcher.EnableRaisingEvents = $true
 
-            # Action blocks only enqueue — no function calls (they fail silently in event context)
+            # Capture queue reference via GetNewClosure() — $script: scope is unavailable in
+            # the restricted event runspace, so we must close over a local variable instead.
+            $capturedQueue = $script:PendingEvents
             if ('created' -in $events) {
-                Register-ObjectEvent -InputObject $watcher -EventName Created -MessageData $watcherDef -Action {
-                    $script:PendingEvents.Enqueue([PSCustomObject]@{
+                $createdAction = {
+                    $capturedQueue.Enqueue([PSCustomObject]@{
                         FilePath = $Event.SourceEventArgs.FullPath
                         Config   = $Event.MessageData
                     })
-                } | Out-Null
+                }.GetNewClosure()
+                Register-ObjectEvent -InputObject $watcher -EventName Created -MessageData $watcherDef -Action $createdAction | Out-Null
             }
 
             if ('updated' -in $events) {
-                Register-ObjectEvent -InputObject $watcher -EventName Changed -MessageData $watcherDef -Action {
-                    $script:PendingEvents.Enqueue([PSCustomObject]@{
+                $changedAction = {
+                    $capturedQueue.Enqueue([PSCustomObject]@{
                         FilePath = $Event.SourceEventArgs.FullPath
                         Config   = $Event.MessageData
                     })
-                } | Out-Null
+                }.GetNewClosure()
+                Register-ObjectEvent -InputObject $watcher -EventName Changed -MessageData $watcherDef -Action $changedAction | Out-Null
             }
 
             $script:Watchers += $watcher
@@ -111,90 +114,86 @@ function Initialize-InboxWatcher {
     }
 
     if ($script:Watchers.Count -gt 0) {
-        # Timer drains the queue every 2 seconds — timer callbacks CAN call module functions
-        $timerCallback = {
-            try {
+        # Use a dedicated runspace with a sleep loop — avoids the System.Threading.Timer
+        # runspace issue where TimerCallback scriptblocks have no PowerShell runspace.
+        # The ConcurrentQueue is a reference type and is shared safely across runspaces.
+        $workerRunspace = [runspacefactory]::CreateRunspace()
+        $workerRunspace.Open()
+        $workerRunspace.SessionStateProxy.SetVariable('Queue', $script:PendingEvents)
+        $workerRunspace.SessionStateProxy.SetVariable('BotRoot', $script:BotRoot)
+
+        $script:WorkerPS = [powershell]::Create()
+        $script:WorkerPS.Runspace = $workerRunspace
+        $null = $script:WorkerPS.AddScript({
+            $recentlyProcessed = @{}
+            while ($true) {
+                Start-Sleep -Seconds 2
                 $item = $null
-                while ($script:PendingEvents.TryDequeue([ref]$item)) {
-                    Invoke-FileListenerEvent -FilePath $item.FilePath -Config $item.Config
+                while ($Queue.TryDequeue([ref]$item)) {
+                    try {
+                        $filePath = $item.FilePath
+                        $config   = $item.Config
+
+                        # Skip directories
+                        if (Test-Path $filePath -PathType Container) { continue }
+
+                        # Debounce: skip if same file processed within last 5 seconds
+                        $now = [DateTime]::UtcNow
+                        if ($recentlyProcessed.ContainsKey($filePath)) {
+                            if (($now - $recentlyProcessed[$filePath]).TotalSeconds -lt 5) { continue }
+                        }
+                        $recentlyProcessed[$filePath] = $now
+
+                        # Purge stale debounce entries (older than 60s)
+                        $stale = @($recentlyProcessed.Keys | Where-Object {
+                            ($now - $recentlyProcessed[$_]).TotalSeconds -gt 60
+                        })
+                        foreach ($key in $stale) { $recentlyProcessed.Remove($key) }
+
+                        # Build context prompt
+                        $fileName    = Split-Path $filePath -Leaf
+                        $folderLabel = if ($config.description) { $config.description } else { "watched folder ($($config.folder))" }
+                        $contextPrompt = "A new file '$fileName' has been added to $folderLabel (path: $filePath). Read this file using your available tools, review its contents against the existing product documentation and task list, and create any new tasks needed to address the changes, requirements, or decisions it represents."
+                        $description = "Review new file: $fileName"
+
+                        # Locate launcher
+                        $launcherPath = Join-Path $BotRoot "systems\runtime\launch-process.ps1"
+                        if (-not (Test-Path $launcherPath)) { continue }
+
+                        $escapedPrompt = $contextPrompt -replace '"', '\"'
+                        $escapedDesc   = $description -replace '"', '\"'
+                        $launchArgs = @(
+                            "-File", "`"$launcherPath`"",
+                            "-Type", "task-creation",
+                            "-Prompt", "`"$escapedPrompt`"",
+                            "-Description", "`"$escapedDesc`""
+                        )
+
+                        $startParams = @{ ArgumentList = $launchArgs }
+                        if ($IsWindows) { $startParams.WindowStyle = 'Normal' }
+                        Start-Process pwsh @startParams
+                    } catch {
+                        # Per-item errors are non-fatal
+                    }
                 }
-            } catch {
-                Write-Verbose "[InboxWatcher] Timer error: $_"
             }
-        }
-        $script:ProcessingTimer = [System.Threading.Timer]::new($timerCallback, $null, 2000, 2000)
+        })
+        $null = $script:WorkerPS.BeginInvoke()
         Write-Verbose "[InboxWatcher] Initialization complete. $($script:Watchers.Count) watcher(s) active"
     }
 }
 
-function Invoke-FileListenerEvent {
-    param(
-        [string]$FilePath,
-        [object]$Config
-    )
-
-    # Skip directories
-    if (Test-Path $FilePath -PathType Container) { return }
-
-    # Debounce: skip if same file was processed within the last 5 seconds
-    $now = [DateTime]::UtcNow
-    if ($script:RecentlyProcessed.ContainsKey($FilePath)) {
-        if (($now - $script:RecentlyProcessed[$FilePath]).TotalSeconds -lt 5) {
-            Write-Verbose "[InboxWatcher] Debounced: $FilePath"
-            return
-        }
-    }
-
-    # Mark as processed
-    $script:RecentlyProcessed[$FilePath] = $now
-
-    # Purge stale debounce entries (older than 60s)
-    $stale = @($script:RecentlyProcessed.Keys | Where-Object {
-        ($now - $script:RecentlyProcessed[$_]).TotalSeconds -gt 60
-    })
-    foreach ($key in $stale) { $script:RecentlyProcessed.Remove($key) }
-
-    # Build context prompt — pass file path so Claude reads it via tools
-    $fileName    = Split-Path $FilePath -Leaf
-    $folderLabel = if ($Config.description) { $Config.description } else { "watched folder ($($Config.folder))" }
-    $contextPrompt = "A new file '$fileName' has been added to $folderLabel (path: $FilePath). Read this file using your available tools, review its contents against the existing product documentation and task list, and create any new tasks needed to address the changes, requirements, or decisions it represents."
-
-    $description = "Review new file: $fileName"
-
-    # Locate launcher
-    $launcherPath = Join-Path $script:BotRoot "systems\runtime\launch-process.ps1"
-    if (-not (Test-Path $launcherPath)) {
-        Write-Warning "[InboxWatcher] Launcher not found: $launcherPath"
-        return
-    }
-
-    # Build argument list — match the pattern in ProcessAPI.psm1
-    $escapedPrompt = $contextPrompt -replace '"', '\"'
-    $escapedDesc   = $description -replace '"', '\"'
-    $launchArgs = @(
-        "-File", "`"$launcherPath`"",
-        "-Type", "task-creation",
-        "-Prompt", "`"$escapedPrompt`"",
-        "-Description", "`"$escapedDesc`""
-    )
-
-    $startParams = @{ ArgumentList = $launchArgs }
-    if ($IsWindows) { $startParams.WindowStyle = 'Normal' }
-
-    try {
-        Start-Process pwsh @startParams
-        Write-Verbose "[InboxWatcher] Triggered task-creation for: $fileName"
-    } catch {
-        Write-Warning "[InboxWatcher] Failed to launch task-creation for '$fileName': $_"
-    }
-}
 
 function Stop-InboxWatcher {
     Write-Verbose "[InboxWatcher] Stopping all inbox watchers"
 
-    if ($script:ProcessingTimer) {
-        try { $script:ProcessingTimer.Dispose() } catch {}
-        $script:ProcessingTimer = $null
+    if ($script:WorkerPS) {
+        try {
+            $script:WorkerPS.Stop()
+            $script:WorkerPS.Runspace.Close()
+            $script:WorkerPS.Dispose()
+        } catch {}
+        $script:WorkerPS = $null
     }
 
     foreach ($w in $script:Watchers) {

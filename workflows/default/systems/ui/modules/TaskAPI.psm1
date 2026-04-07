@@ -393,15 +393,12 @@ function Submit-TaskAnswer {
     if ($Attachments -and @($Attachments).Count -gt 0) {
         $allowedExtensions = @('.md', '.docx', '.xlsx', '.pdf', '.txt')
 
-        # Find the task to get the pending question ID for directory naming
+        # Read task file directly by ID (tasks are stored as {id}.json)
         $needsInputDir = Join-Path $script:Config.BotRoot "workspace\tasks\needs-input"
-        $taskFile = Get-ChildItem -Path $needsInputDir -Filter "*.json" -File -ErrorAction SilentlyContinue |
-            Where-Object {
-                try { (Get-Content $_.FullName -Raw | ConvertFrom-Json).id -eq $TaskId } catch { $false }
-            } | Select-Object -First 1
+        $taskFilePath = Join-Path $needsInputDir "$TaskId.json"
 
-        if ($taskFile) {
-            $taskData = Get-Content $taskFile.FullName -Raw | ConvertFrom-Json
+        if (Test-Path $taskFilePath) {
+            $taskData = Get-Content $taskFilePath -Raw | ConvertFrom-Json
             $questionId = $taskData.pending_question.id
 
             $attachDir = Join-Path $script:Config.BotRoot "workspace\attachments\$TaskId\$questionId"
@@ -410,20 +407,21 @@ function Submit-TaskAnswer {
             }
 
             foreach ($att in @($Attachments)) {
-                $ext = [System.IO.Path]::GetExtension($att.name).ToLower()
+                $safeName = [System.IO.Path]::GetFileName($att.name)
+                $ext = [System.IO.Path]::GetExtension($safeName).ToLower()
                 if ($ext -notin $allowedExtensions) {
-                    Write-DotbotWarning "Skipping attachment '$($att.name)': unsupported extension '$ext'"
+                    Write-DotbotWarning "Skipping attachment '$safeName': unsupported extension '$ext'"
                     continue
                 }
 
                 try {
                     $bytes = [System.Convert]::FromBase64String($att.content)
-                    $filePath = Join-Path $attachDir $att.name
+                    $filePath = Join-Path $attachDir $safeName
                     [System.IO.File]::WriteAllBytes($filePath, $bytes)
-                    $relPath = ".bot/workspace/attachments/$TaskId/$questionId/$($att.name)"
+                    $relPath = ".bot/workspace/attachments/$TaskId/$questionId/$safeName"
 
                     $attachmentMeta += @{
-                        name = $att.name
+                        name = $safeName
                         size = $att.size
                         path = $relPath
                     }

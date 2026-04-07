@@ -1486,20 +1486,21 @@ try {
                                                 New-Item -ItemType Directory -Force -Path $attachDir | Out-Null
                                             }
                                             foreach ($att in @($ans.attachments)) {
-                                                $ext = [System.IO.Path]::GetExtension($att.name).ToLower()
+                                                $safeName = [System.IO.Path]::GetFileName($att.name)
+                                                $ext = [System.IO.Path]::GetExtension($safeName).ToLower()
                                                 if ($ext -notin $allowedAttachExtensions) { continue }
                                                 try {
                                                     $bytes = [System.Convert]::FromBase64String($att.content)
-                                                    $filePath = Join-Path $attachDir $att.name
+                                                    $filePath = Join-Path $attachDir $safeName
                                                     [System.IO.File]::WriteAllBytes($filePath, $bytes)
-                                                    $relPath = ".bot/workspace/product/attachments/$($ans.question_id)/$($att.name)"
+                                                    $relPath = ".bot/workspace/product/attachments/$($ans.question_id)/$safeName"
                                                     $attachMeta += @{
-                                                        name = $att.name
+                                                        name = $safeName
                                                         size = $att.size
                                                         path = $relPath
                                                     }
                                                 } catch {
-                                                    Write-BotLog "Failed to save kickstart attachment '$($att.name)': $($_.Exception.Message)"
+                                                    Write-BotLog "Failed to save kickstart attachment '$safeName': $($_.Exception.Message)"
                                                 }
                                             }
                                             if ($attachMeta.Count -gt 0) {

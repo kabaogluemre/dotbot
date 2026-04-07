@@ -105,10 +105,8 @@ public class RespondModel : PageModel
     public async Task<IActionResult> OnPostAsync(Guid instanceId, string projectId, Guid questionId, string? selectedKey, string? freeText)
     {
         var attachments = Request.Form.Files;
-        _logger.LogInformation("POST Respond: instanceId={InstanceId}, selectedKey={SelectedKey}, freeText={FreeText}, attachmentCount={AttachmentCount}, contentType={ContentType}, formKeys=[{FormKeys}]",
-            instanceId, selectedKey, freeText, attachments.Count,
-            Request.ContentType,
-            string.Join(", ", Request.Form.Keys));
+        _logger.LogDebug("POST Respond: instanceId={InstanceId}, selectedKey={SelectedKey}, attachmentCount={AttachmentCount}",
+            instanceId, selectedKey, attachments.Count);
 
         var email = HttpContext.Items["AuthenticatedEmail"] as string;
         if (string.IsNullOrEmpty(email))

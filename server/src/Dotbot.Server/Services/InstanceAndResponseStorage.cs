@@ -31,8 +31,7 @@ public class AttachmentStorageService
         {
             var blob = _container.GetBlobClient(blobPath);
             var result = await blob.DownloadStreamingAsync();
-            var props = await blob.GetPropertiesAsync();
-            var contentType = props.Value.ContentType ?? "application/octet-stream";
+            var contentType = result.Value.Details.ContentType ?? "application/octet-stream";
             return (result.Value.Content, contentType);
         }
         catch (RequestFailedException ex) when (ex.Status == 404)

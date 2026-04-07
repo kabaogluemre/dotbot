@@ -155,7 +155,7 @@ try
                 options.Instance = "https://login.microsoftonline.com/";
                 options.TenantId = builder.Configuration["MicrosoftAppTenantId"];
                 options.ClientId = builder.Configuration["MicrosoftAppId"];
-                options.ClientSecret = builder.Configuration["MicrosoftAppPassword"];
+                options.ClientSecret = builder.Configuration["MicrosoftAppPassword"]; // noscan
                 options.CallbackPath = "/signin-oidc";
                 options.ResponseType = OpenIdConnectResponseType.Code;
                 options.Scope.Clear();
@@ -580,11 +580,11 @@ static void LogStartupConfiguration(WebApplicationBuilder builder)
     var appType = config["MicrosoftAppType"];
     var appId = config["MicrosoftAppId"];
     var tenantId = config["MicrosoftAppTenantId"];
-    var hasPassword = !string.IsNullOrEmpty(config["MicrosoftAppPassword"]);
+    var hasPassword = !string.IsNullOrEmpty(config["MicrosoftAppPassword"]); // noscan
     Log.Information("  AppType: {AppType}", appType ?? "(not set)");
     Log.Information("  AppId: {AppId}", string.IsNullOrEmpty(appId) ? "(not set)" : appId);
     Log.Information("  TenantId: {TenantId}", string.IsNullOrEmpty(tenantId) ? "(not set)" : tenantId);
-    Log.Information("  Password: {HasPassword}", hasPassword ? "SET" : "(not set)");
+    Log.Information("  Password: {HasPassword}", hasPassword ? "SET" : "(not set)"); // noscan
     Log.Information("");
 
     // Blob Storage

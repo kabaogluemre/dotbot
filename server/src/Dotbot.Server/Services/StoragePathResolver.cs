@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using System.IO;
 
 namespace Dotbot.Server.Services;
 
@@ -38,7 +39,7 @@ public class StoragePathResolver
         => $"{_env}/tokens/devices/{deviceTokenId}.json";
 
     public string AttachmentBlobPath(Guid responseId, string fileName)
-        => $"{_env}/attachments/{responseId}/{fileName}";
+        => $"{_env}/attachments/{responseId}/{Path.GetFileName(fileName)}";
 
     public string AdministratorsPath()
         => $"{_env}/config/administrators.json";

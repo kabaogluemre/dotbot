@@ -155,6 +155,9 @@
                         const newCard = doc.querySelector('.card');
                         if (newCard) document.querySelector('.card').replaceWith(newCard);
                         if (btn) { btn.disabled = false; btn.textContent = 'Submit Response'; }
+                    } else {
+                        if (btn) { btn.disabled = false; btn.textContent = 'Submit Response'; }
+                        alert('Submission failed (' + resp.status + '). Please try again.');
                     }
                 } catch (err) {
                     if (btn) { btn.disabled = false; btn.textContent = 'Submit Response'; }

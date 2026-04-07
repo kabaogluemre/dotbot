@@ -1637,6 +1637,19 @@ try {
                     $defaultName = if ($defaultManifest) { $defaultManifest.name } else { 'default' }
                     $skipDefault = $installedWfNames -contains $defaultName
 
+                    # Also skip default when an overlay workflow was applied during init
+                    if (-not $skipDefault) {
+                        $settingsFile = Join-Path $botRoot "settings\settings.default.json"
+                        if (Test-Path $settingsFile) {
+                            try {
+                                $sd = Get-Content $settingsFile -Raw | ConvertFrom-Json
+                                if ($sd.PSObject.Properties['workflow'] -and $sd.workflow -and $sd.workflow -ne 'default' -and $sd.workflow -ne $defaultName) {
+                                    $skipDefault = $true
+                                }
+                            } catch { <# settings unreadable - keep default visible #> }
+                        }
+                    }
+
                     if (-not $skipDefault) {
                         $defaultTasks = if ($tasksByWorkflow.ContainsKey('__default__')) { $tasksByWorkflow['__default__'] } else { @{ todo = 0; in_progress = 0; done = 0; total = 0 } }
 

@@ -1646,7 +1646,7 @@ try {
                                 if ($sd.PSObject.Properties['workflow'] -and $sd.workflow -and $sd.workflow -ne 'default' -and $sd.workflow -ne $defaultName) {
                                     $skipDefault = $true
                                 }
-                            } catch { <# settings unreadable - keep default visible #> }
+                            } catch { Write-BotLog "Failed to read settings for workflow check: $_" }
                         }
                     }
 

@@ -38,31 +38,6 @@ if (-not $dotbotInstalled) {
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
-function Initialize-TestBotProject {
-    <#
-    .SYNOPSIS
-        Create a temp project and run dotbot init.
-    #>
-    $project = New-TestProject
-    Push-Location $project
-    & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") 2>&1 | Out-Null
-    & git add -A 2>&1 | Out-Null
-    & git commit -m "dotbot init" --quiet 2>&1 | Out-Null
-    Pop-Location
-
-    $botDir = Join-Path $project ".bot"
-    $controlDir = Join-Path $botDir ".control"
-    if (-not (Test-Path $controlDir)) {
-        New-Item -Path $controlDir -ItemType Directory -Force | Out-Null
-    }
-
-    return @{
-        ProjectRoot = $project
-        BotDir      = $botDir
-        ControlDir  = $controlDir
-    }
-}
-
 function New-KickstartLauncher {
     <#
     .SYNOPSIS

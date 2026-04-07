@@ -1643,10 +1643,11 @@ try {
                         if (Test-Path $settingsFile) {
                             try {
                                 $sd = Get-Content $settingsFile -Raw | ConvertFrom-Json
-                                if ($sd.PSObject.Properties['workflow'] -and $sd.workflow -and $sd.workflow -ne 'default' -and $sd.workflow -ne $defaultName) {
+                                $activeWf = if ($sd.PSObject.Properties['workflow']) { $sd.workflow } else { $sd.profile }
+                                if ($activeWf -and $activeWf -ne 'default' -and $activeWf -ne $defaultName) {
                                     $skipDefault = $true
                                 }
-                            } catch { Write-BotLog "Failed to read settings for workflow check: $_" }
+                            } catch { Write-BotLog -Level 'Warn' -Message 'Failed to read settings for workflow check' -Exception $_ }
                         }
                     }
 

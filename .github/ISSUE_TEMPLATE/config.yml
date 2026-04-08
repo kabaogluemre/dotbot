@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: "Discord - questions & chat"
+    url: "https://discord.gg/REPLACE_ME"  # TODO: replace with real invite from ideas/team/discord-server.json
+    about: "Ask questions and chat with the team in #general on Discord."
+
+  - name: "Discord - looking for work"
+    url: "https://discord.gg/REPLACE_ME"  # TODO: replace with real invite
+    about: "Browse items ready for pickup in #ap-contributors on Discord."

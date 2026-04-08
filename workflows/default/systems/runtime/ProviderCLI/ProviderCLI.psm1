@@ -452,7 +452,24 @@ function Invoke-Provider {
     $cliArgs = Build-ProviderCliArgs -Config $config -Prompt $Prompt -ModelId $Model -Streaming $false -PermissionMode $PermissionMode
 
     $executable = $config.executable
-    $Prompt | & $executable @cliArgs
+
+    $previousOutputEncoding = $OutputEncoding
+    $previousConsoleInputEncoding = [Console]::InputEncoding
+    $previousConsoleOutputEncoding = [Console]::OutputEncoding
+    $utf8Encoding = [System.Text.UTF8Encoding]::new($false)
+
+    try {
+        $OutputEncoding = $utf8Encoding
+        [Console]::InputEncoding = $utf8Encoding
+        [Console]::OutputEncoding = $utf8Encoding
+
+        $Prompt | & $executable @cliArgs
+    }
+    finally {
+        $OutputEncoding = $previousOutputEncoding
+        [Console]::InputEncoding = $previousConsoleInputEncoding
+        [Console]::OutputEncoding = $previousConsoleOutputEncoding
+    }
 }
 
 function New-ProviderSession {

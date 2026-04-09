@@ -741,6 +741,92 @@ if ((Test-Path $wfAddScript) -and (Test-Path $kickstartFromScratchDir)) {
     Write-TestResult -Name "workflow add functionality tests" -Status Skip -Message "workflow-add.ps1 or kickstart-from-scratch workflow not found"
 }
 
+# ═══════════════════════════════════════════════════════════════════
+# DEFAULT WORKFLOW RESOLUTION
+# ═══════════════════════════════════════════════════════════════════
+
+Write-Host ""
+Write-Host "  DEFAULT WORKFLOW RESOLUTION" -ForegroundColor Cyan
+Write-Host "  ──────────────────────────────────────────" -ForegroundColor DarkGray
+
+$serverFile = Join-Path $dotbotDir "workflows\default\systems\ui\server.ps1"
+if (Test-Path $serverFile) {
+    $serverContent = Get-Content $serverFile -Raw
+
+    Assert-True -Name "Workflow run endpoint has default workflow fallback" `
+        -Condition ($serverContent -match 'if \(-not \(Test-Path \$wfDir\)\)' -and $serverContent -match 'Read-WorkflowManifest -WorkflowDir \$botRoot') `
+        -Message "Missing default workflow fallback in /api/workflows/*/run endpoint"
+
+    Assert-True -Name "Default fallback checks workflow.yaml at bot root" `
+        -Condition ($serverContent -match 'Join-Path \$botRoot "workflow\.yaml"') `
+        -Message "Fallback does not check .bot/workflow.yaml"
+
+    Assert-True -Name "Workflow run endpoint validates workflow.yaml exists" `
+        -Condition ($serverContent -match 'Test-Path \(Join-Path \$wfDir "workflow\.yaml"\)') `
+        -Message "Missing workflow.yaml existence check after resolution"
+
+    Assert-True -Name "Workflow run endpoint does not use Get-CachedManifest for default resolution" `
+        -Condition (-not ($serverContent -match 'Get-CachedManifest.*workflows/\*/run')) `
+        -Message "Default resolution should use inline Read-WorkflowManifest, not Get-CachedManifest"
+} else {
+    Write-TestResult -Name "server.ps1 exists" -Status Skip -Message "Server file not found"
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# WORKFLOW RUN ENDPOINT: FORM DATA HANDLING
+# ═══════════════════════════════════════════════════════════════════
+
+Write-Host ""
+Write-Host "  WORKFLOW RUN FORM DATA" -ForegroundColor Cyan
+Write-Host "  ──────────────────────────────────────────" -ForegroundColor DarkGray
+
+if (Test-Path $serverFile) {
+    Assert-True -Name "Workflow run endpoint reads request body" `
+        -Condition ($serverContent -match 'System\.IO\.StreamReader.*\$request\.InputStream') `
+        -Message "Endpoint does not read request body for form data"
+
+    Assert-True -Name "Workflow run endpoint saves briefing files" `
+        -Condition ($serverContent -match 'workspace\\product\\briefing') `
+        -Message "Endpoint does not save briefing files"
+
+    Assert-True -Name "Workflow run endpoint saves user prompt" `
+        -Condition ($serverContent -match 'kickstart-prompt\.txt') `
+        -Message "Endpoint does not save user prompt to kickstart-prompt.txt"
+
+    Assert-True -Name "Workflow run endpoint returns 400 for malformed JSON" `
+        -Condition ($serverContent -match 'Invalid JSON in request body') `
+        -Message "Endpoint does not return 400 for malformed request body"
+
+    Assert-True -Name "Briefing file upload uses safe filename sanitization" `
+        -Condition ($serverContent -match 'GetInvalidFileNameChars') `
+        -Message "File upload does not sanitize filenames with GetInvalidFileNameChars"
+} else {
+    Write-TestResult -Name "server.ps1 form data tests" -Status Skip -Message "Server file not found"
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# CLI: DEFAULT WORKFLOW RESOLUTION IN workflow-run.ps1
+# ═══════════════════════════════════════════════════════════════════
+
+Write-Host ""
+Write-Host "  CLI DEFAULT WORKFLOW RESOLUTION" -ForegroundColor Cyan
+Write-Host "  ──────────────────────────────────────────" -ForegroundColor DarkGray
+
+$wfRunScript = Join-Path $dotbotDir "scripts\workflow-run.ps1"
+if (Test-Path $wfRunScript) {
+    $wfRunContent = Get-Content $wfRunScript -Raw
+
+    Assert-True -Name "workflow-run.ps1 has default workflow fallback" `
+        -Condition ($wfRunContent -match 'workflow\.yaml' -and $wfRunContent -match 'Read-WorkflowManifest -WorkflowDir \$BotDir') `
+        -Message "CLI does not fall back to .bot/workflow.yaml for default workflow"
+
+    Assert-True -Name "workflow-run.ps1 checks workflow.yaml existence" `
+        -Condition ($wfRunContent -match 'Test-Path.*workflow\.yaml') `
+        -Message "CLI does not validate workflow.yaml exists"
+} else {
+    Write-TestResult -Name "workflow-run.ps1 CLI tests" -Status Skip -Message "Script not found"
+}
+
 Write-Host ""
 
 # ═══════════════════════════════════════════════════════════════════

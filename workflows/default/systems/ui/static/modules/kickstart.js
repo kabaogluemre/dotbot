@@ -542,8 +542,9 @@ async function executeKickstart(prompt, needsInterview, autoWorkflow, skipPhases
             const result = await response.json();
 
             if (result.success) {
+                const wfName = kickstartWorkflowName;
                 closeKickstartModal();
-                showToast(`Workflow "${kickstartWorkflowName}" started (${result.tasks_created} tasks)`, 'success', 8000);
+                showToast(`Workflow "${wfName}" started (${result.tasks_created} tasks)`, 'success', 8000);
                 if (typeof pollState === 'function') await pollState();
             } else {
                 showToast('Failed to start workflow: ' + (result.error || 'Unknown error'), 'error');

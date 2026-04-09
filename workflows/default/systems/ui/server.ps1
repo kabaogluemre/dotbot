@@ -1811,7 +1811,14 @@ try {
                                     $rawBody = $reader.ReadToEnd()
                                     $reader.Close()
                                     if ($rawBody) { $body = $rawBody | ConvertFrom-Json }
-                                } catch { $body = $null }
+                                } catch {
+                                    if ($rawBody) {
+                                        $statusCode = 400
+                                        $content = @{ success = $false; error = "Invalid JSON in request body: $($_.Exception.Message)" } | ConvertTo-Json -Compress
+                                        break
+                                    }
+                                    $body = $null
+                                }
 
                                 # Save briefing files if provided
                                 if ($body -and $body.files) {
@@ -1821,10 +1828,20 @@ try {
                                     }
                                     foreach ($file in @($body.files)) {
                                         if (-not $file -or -not $file.name -or -not $file.content) { continue }
-                                        $decoded = [Convert]::FromBase64String($file.content)
-                                        $safeName = $file.name -replace '[^\w\-\.]', '_'
-                                        $filePath = Join-Path $briefingDir $safeName
-                                        [System.IO.File]::WriteAllBytes($filePath, $decoded)
+                                        # Sanitize filename: strip path components, remove invalid chars, handle Windows reserved names
+                                        $safeName = [System.IO.Path]::GetFileName([string]$file.name)
+                                        $safeName = $safeName.Trim().TrimEnd('.', ' ')
+                                        $invalidCharsPattern = [Regex]::Escape((-join [System.IO.Path]::GetInvalidFileNameChars()))
+                                        $safeName = [Regex]::Replace($safeName, "[$invalidCharsPattern]", '_')
+                                        if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = "upload.bin" }
+                                        if ($safeName -match '^(?i:(con|prn|aux|nul|com[1-9]|lpt[1-9]))(\..*)?$') { $safeName = "_$safeName" }
+                                        try {
+                                            $decoded = [Convert]::FromBase64String([string]$file.content)
+                                            $filePath = Join-Path $briefingDir $safeName
+                                            [System.IO.File]::WriteAllBytes($filePath, $decoded)
+                                        } catch {
+                                            continue
+                                        }
                                     }
                                 }
 

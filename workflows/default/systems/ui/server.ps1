@@ -2226,7 +2226,7 @@ try {
     try {
         Stop-InboxWatcher
     } catch {
-        Write-Verbose "Cleanup: failed to stop inbox watcher: $_"
+        Write-BotLog -Level Warn -Message "Cleanup: failed to stop inbox watcher: $_"
     }
 
     # Safely stop listener if it's still running

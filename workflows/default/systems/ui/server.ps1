@@ -1798,6 +1798,12 @@ try {
                         $contentType = "application/json; charset=utf-8"
                         try {
                             $wfName = ($url -replace "^/api/workflows/", "" -replace "/run$", "")
+                            # Validate workflow name to prevent path traversal
+                            if ($wfName -notmatch '^[a-zA-Z0-9_-]+$') {
+                                $statusCode = 400
+                                $content = @{ success = $false; error = "Invalid workflow name: $wfName" } | ConvertTo-Json -Compress
+                                break
+                            }
                             # Default workflow lives at .bot/ root; installed workflows at .bot/workflows/{name}/
                             $wfDir = Join-Path $botRoot "workflows\$wfName"
                             if (-not (Test-Path $wfDir)) {
@@ -1832,6 +1838,7 @@ try {
                                 }
 
                                 # Save briefing files if provided
+                                $failedFiles = 0
                                 if ($body -and $body.files) {
                                     $briefingDir = Join-Path $botRoot "workspace\product\briefing"
                                     if (-not (Test-Path $briefingDir)) {
@@ -1851,18 +1858,19 @@ try {
                                             $filePath = Join-Path $briefingDir $safeName
                                             [System.IO.File]::WriteAllBytes($filePath, $decoded)
                                         } catch {
+                                            $failedFiles++
                                             continue
                                         }
                                     }
                                 }
 
-                                # Save user prompt for task prompt injection
+                                # Save user prompt for task prompt injection (canonical path used by ProductAPI/runtime)
                                 if ($body -and $body.prompt) {
-                                    $promptDir = Join-Path $botRoot "workspace\product"
-                                    if (-not (Test-Path $promptDir)) {
-                                        New-Item -Path $promptDir -ItemType Directory -Force | Out-Null
+                                    $launchersDir = Join-Path $botRoot ".control\launchers"
+                                    if (-not (Test-Path $launchersDir)) {
+                                        New-Item -Path $launchersDir -ItemType Directory -Force | Out-Null
                                     }
-                                    $body.prompt | Set-Content -Path (Join-Path $promptDir "kickstart-prompt.txt") -Encoding UTF8 -NoNewline
+                                    $body.prompt | Set-Content -Path (Join-Path $launchersDir "kickstart-prompt.txt") -Encoding UTF8 -NoNewline
                                 }
 
                                 $manifest = Read-WorkflowManifest -WorkflowDir $wfDir
@@ -1887,13 +1895,15 @@ try {
 
                                 # Start-ProcessLaunch auto-detects max_concurrent for workflow type
                                 $launchResult = Start-ProcessLaunch -Type 'task-runner' -Continue $true -Description "Workflow: $wfName" -WorkflowName $wfName
-                                $content = @{
+                                $response = @{
                                     success = $true
                                     workflow = $wfName
                                     tasks_created = $createdTasks.Count
                                     slots_launched = $launchResult.slots_launched
                                     process_id = $launchResult.process_id
-                                } | ConvertTo-Json -Compress
+                                }
+                                if ($failedFiles -gt 0) { $response.files_failed = $failedFiles }
+                                $content = $response | ConvertTo-Json -Compress
                             }
                         } catch {
                             $statusCode = 500

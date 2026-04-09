@@ -42,6 +42,7 @@ if (-not (Test-Path $wfDir)) {
         $defaultName = if ($defaultManifest -and $defaultManifest.name) { $defaultManifest.name } else { 'default' }
         if ($WorkflowName -eq $defaultName -or $WorkflowName -eq 'default') {
             $wfDir = $BotDir
+            $WorkflowName = $defaultName
         }
     }
 }

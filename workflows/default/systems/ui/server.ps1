@@ -1807,6 +1807,7 @@ try {
                                 $defaultName = if ($defaultManifest -and $defaultManifest.name) { $defaultManifest.name } else { 'default' }
                                 if ($wfName -eq $defaultName -or $wfName -eq 'default') {
                                     $wfDir = $botRoot
+                                    $wfName = $defaultName
                                 }
                             }
 

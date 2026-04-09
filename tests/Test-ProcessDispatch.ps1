@@ -164,7 +164,7 @@ Assert-True -Name "Task-runner dispatch handles 'barrier' task type" `
     -Message "No 'barrier' case in task type dispatch switch"
 
 Assert-True -Name "Barrier task type sets typeSuccess to true" `
-    -Condition ($workflowProcessContent -match "(?s)'barrier'\s*\{.*?\`$typeSuccess\s*=\s*\`$true") `
+    -Condition ($workflowProcessContent -match "(?s)'barrier'\s*\{.*?\\$typeSuccess\s*=\s*\\$true") `
     -Message "Barrier case does not set `$typeSuccess = `$true"
 
 # ===================================================================

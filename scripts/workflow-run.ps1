@@ -136,7 +136,7 @@ Write-Status "Launching workflow process..."
 
 $wfArgs = @(
     "-NoProfile", "-File", $lpPath,
-    "-Type", "workflow",
+    "-Type", "task-runner",
     "-Continue",
     "-Workflow", $WorkflowName,
     "-Description", "Run: $WorkflowName"

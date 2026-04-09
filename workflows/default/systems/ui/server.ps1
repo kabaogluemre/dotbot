@@ -1804,6 +1804,39 @@ try {
                                 $statusCode = 404
                                 $content = @{ success = $false; error = "Workflow not found: $wfName" } | ConvertTo-Json -Compress
                             } else {
+                                # Read optional form data (prompt, files) from request body
+                                $body = $null
+                                try {
+                                    $reader = New-Object System.IO.StreamReader($request.InputStream)
+                                    $rawBody = $reader.ReadToEnd()
+                                    $reader.Close()
+                                    if ($rawBody) { $body = $rawBody | ConvertFrom-Json }
+                                } catch { $body = $null }
+
+                                # Save briefing files if provided
+                                if ($body -and $body.files) {
+                                    $briefingDir = Join-Path $botRoot "workspace\product\briefing"
+                                    if (-not (Test-Path $briefingDir)) {
+                                        New-Item -Path $briefingDir -ItemType Directory -Force | Out-Null
+                                    }
+                                    foreach ($file in @($body.files)) {
+                                        if (-not $file -or -not $file.name -or -not $file.content) { continue }
+                                        $decoded = [Convert]::FromBase64String($file.content)
+                                        $safeName = $file.name -replace '[^\w\-\.]', '_'
+                                        $filePath = Join-Path $briefingDir $safeName
+                                        [System.IO.File]::WriteAllBytes($filePath, $decoded)
+                                    }
+                                }
+
+                                # Save user prompt for task prompt injection
+                                if ($body -and $body.prompt) {
+                                    $promptDir = Join-Path $botRoot "workspace\product"
+                                    if (-not (Test-Path $promptDir)) {
+                                        New-Item -Path $promptDir -ItemType Directory -Force | Out-Null
+                                    }
+                                    $body.prompt | Set-Content -Path (Join-Path $promptDir "kickstart-prompt.txt") -Encoding UTF8 -NoNewline
+                                }
+
                                 $manifest = Read-WorkflowManifest -WorkflowDir $wfDir
 
                                 # Clear tasks if rerun: fresh

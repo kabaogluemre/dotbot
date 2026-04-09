@@ -1798,9 +1798,18 @@ try {
                         $contentType = "application/json; charset=utf-8"
                         try {
                             $wfName = ($url -replace "^/api/workflows/", "" -replace "/run$", "")
+                            # Default workflow lives at .bot/ root; installed workflows at .bot/workflows/{name}/
                             $wfDir = Join-Path $botRoot "workflows\$wfName"
-
                             if (-not (Test-Path $wfDir)) {
+                                # Check if this is the default workflow (manifest at .bot/workflow.yaml)
+                                $defaultManifest = Get-CachedManifest -Dir $botRoot
+                                $defaultName = if ($defaultManifest) { $defaultManifest.name } else { 'default' }
+                                if ($wfName -eq $defaultName -or $wfName -eq 'default') {
+                                    $wfDir = $botRoot
+                                }
+                            }
+
+                            if (-not (Test-Path (Join-Path $wfDir "workflow.yaml"))) {
                                 $statusCode = 404
                                 $content = @{ success = $false; error = "Workflow not found: $wfName" } | ConvertTo-Json -Compress
                             } else {

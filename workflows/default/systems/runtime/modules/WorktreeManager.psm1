@@ -334,9 +334,9 @@ function New-DirectoryLink {
     # Windows: NTFS junctions (no elevation required)
     # macOS/Linux: symbolic links
     if ($IsWindows) {
-        New-Item -ItemType Junction -Path $Path -Target $Target | Out-Null
+        New-Item -ItemType Junction -Path $Path -Target $Target -ErrorAction Stop | Out-Null
     } else {
-        New-Item -ItemType SymbolicLink -Path $Path -Target $Target | Out-Null
+        New-Item -ItemType SymbolicLink -Path $Path -Target $Target -ErrorAction Stop | Out-Null
     }
 }
 
@@ -382,8 +382,8 @@ function Test-JunctionsExist {
 function Remove-Junctions {
     <#
     .SYNOPSIS
-    Remove directory junctions from a worktree without following into shared dirs.
-    Returns $true if all junctions were removed, $false otherwise.
+    Remove directory junctions (Windows) and symlinks (macOS/Linux) from a worktree without following into shared dirs.
+    Returns $true if all links were removed, $false otherwise.
     Throws on failure unless -ErrorOnFailure is $false.
     #>
     param(
@@ -567,17 +567,17 @@ function New-TaskWorktree {
         }
 
         # 5. .bot/recipes/ — recipes, research methodologies, standards
-        $worktreePromptsDir = Join-Path $worktreePath ".bot\recipes"
-        $mainPromptsDir = Join-Path $BotRoot "recipes"
-        if ((Test-Path $mainPromptsDir) -and -not (Test-Path $worktreePromptsDir)) {
-            New-DirectoryLink -Path $worktreePromptsDir -Target $mainPromptsDir
+        $worktreeRecipesDir = Join-Path $worktreePath ".bot\recipes"
+        $mainRecipesDir = Join-Path $BotRoot "recipes"
+        if ((Test-Path $mainRecipesDir) -and -not (Test-Path $worktreeRecipesDir)) {
+            New-DirectoryLink -Path $worktreeRecipesDir -Target $mainRecipesDir
         }
 
         # 6. .bot/settings/ — settings defaults
-        $worktreeDefaultsDir = Join-Path $worktreePath ".bot\settings"
-        $mainDefaultsDir = Join-Path $BotRoot "settings"
-        if ((Test-Path $mainDefaultsDir) -and -not (Test-Path $worktreeDefaultsDir)) {
-            New-DirectoryLink -Path $worktreeDefaultsDir -Target $mainDefaultsDir
+        $worktreeSettingsDir = Join-Path $worktreePath ".bot\settings"
+        $mainSettingsDir = Join-Path $BotRoot "settings"
+        if ((Test-Path $mainSettingsDir) -and -not (Test-Path $worktreeSettingsDir)) {
+            New-DirectoryLink -Path $worktreeSettingsDir -Target $mainSettingsDir
         }
 
         # 7. .bot/workspace/product/ — shared research outputs and briefing

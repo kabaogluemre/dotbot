@@ -435,6 +435,12 @@ function Get-BotState {
             }
     }
 
+    # When in-progress/ is empty, currentTask falls back to analysing/ (line 169).
+    # Exclude that task from analysing list to prevent duplicate cards in UI.
+    if ($currentTask -and $inProgressTasks.Count -eq 0) {
+        $analysingTasksList = @($analysingTasksList | Where-Object { $_.id -ne $currentTask.id })
+    }
+
     # Build per-workflow task counts from all task lists
     $allTaskFiles = @()
     foreach ($statusDir in @('todo', 'analysing', 'needs-input', 'analysed', 'in-progress', 'done', 'skipped')) {

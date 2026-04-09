@@ -1800,6 +1800,7 @@ try {
                             $wfName = ($url -replace "^/api/workflows/", "" -replace "/run$", "")
                             # Default workflow lives at .bot/ root; installed workflows at .bot/workflows/{name}/
                             $wfDir = Join-Path $botRoot "workflows\$wfName"
+                            if (-not (Test-Path $wfDir)) {
                                 # Inline manifest read — Get-CachedManifest may not be defined yet
                                 $defaultYaml = Join-Path $botRoot "workflow.yaml"
                                 $defaultManifest = if (Test-Path -LiteralPath $defaultYaml) { Read-WorkflowManifest -WorkflowDir $botRoot } else { $null }
@@ -1807,6 +1808,7 @@ try {
                                 if ($wfName -eq $defaultName -or $wfName -eq 'default') {
                                     $wfDir = $botRoot
                                 }
+                            }
 
                             if (-not (Test-Path (Join-Path $wfDir "workflow.yaml"))) {
                                 $statusCode = 404

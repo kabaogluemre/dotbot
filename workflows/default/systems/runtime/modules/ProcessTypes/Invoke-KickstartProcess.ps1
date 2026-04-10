@@ -55,6 +55,8 @@ try {
     # ===== Kickstart task pipeline (manifest-driven) =====
     # Load manifest helpers
     . (Join-Path $botRoot "systems\runtime\modules\workflow-manifest.ps1")
+    # Load post-script runner (shared with Invoke-WorkflowProcess)
+    . (Join-Path $botRoot "systems\runtime\modules\post-script-runner.ps1")
 
     $kickstartPhases = @()
     $activeWorkflowDir = $null
@@ -623,14 +625,11 @@ Instructions:
         }
 
         # --- Post-script ---
+        # Delegated to shared helper; raises on non-zero exit so a failing
+        # post-script now fails the phase instead of being silently ignored.
         if ($phase.post_script) {
-            $rawPostScript = $phase.post_script
-            $postPath = if ($rawPostScript -match '^scripts[/\\]') {
-                Join-Path $botRoot $rawPostScript
-            } else {
-                Join-Path $botRoot "systems\runtime\$rawPostScript"
-            }
-            & $postPath -BotRoot $botRoot -ProductDir $productDir -Settings $settings -Model $claudeModelName -ProcessId $procId
+            Invoke-PostScript -BotRoot $botRoot -ProductDir $productDir -Settings $settings `
+                -Model $claudeModelName -ProcessId $procId -RawPostScript $phase.post_script
         }
 
         # --- Git checkpoint (supports manifest-style commit object and legacy commit_paths/commit_message) ---

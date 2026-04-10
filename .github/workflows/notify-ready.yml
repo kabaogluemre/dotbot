@@ -1,4 +1,4 @@
-name: "Notify: issue ready → #ap-contributors"
+name: "Notify: issue ready → #contributors"
 
 on:
   issues:

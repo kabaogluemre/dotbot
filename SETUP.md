@@ -58,7 +58,7 @@ Four webhooks are provisioned on the dotbot Discord server and stored as GitHub 
 |---|---|---|---|
 | `DISCORD_DEVOPS_WEBHOOK` | #devops | GitHub - New Issues | New issue opened |
 | `DISCORD_ADVISORY_WEBHOOK` | #advisory-steering | GitHub - Triage & Stale | Triage nudge (weekday cron), weekly stale digest |
-| `DISCORD_CONTRIBUTORS_WEBHOOK` | #ap-contributors | GitHub - Ready for Pickup | Issue labelled `ready` |
+| `DISCORD_CONTRIBUTORS_WEBHOOK` | #contributors | GitHub - Ready for Pickup | Issue labelled `ready` |
 | `DISCORD_PR_WEBHOOK` | #pull-requests | GitHub - PR Activity | PR opened, ready for review, merged, closed |
 
 ### Re-provisioning webhooks

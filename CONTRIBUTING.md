@@ -21,7 +21,7 @@ A senior group (the advisory-steering crew) reviews new issues on a Tue/Fri cade
 Two ways to find something to work on:
 
 - **Project board** - filter by Status = `Ready`, sort by size. [View the board](https://github.com/users/andresharpe/projects/2)
-- **Discord** - watch `#ap-contributors` for notifications when items move to Ready.
+- **Discord** - watch `#contributors` for notifications when items move to Ready.
 
 Look for `good-first-issue` and `help-wanted` labels if you're new.
 
@@ -77,7 +77,7 @@ Your PR closes the linked issue. The card moves to Done. The change ships in the
 We coordinate on the dotbot Discord server. Here's the channel map:
 
 - `#general` - questions, chat, general discussion
-- `#ap-contributors` - work up for grabs, claim threads
+- `#contributors` - work up for grabs, claim threads
 - `#pull-requests` - PR activity notifications
 - `#devops` - issue firehose, CI/CD discussion
 - `#architecture`, `#ui-design`, `#documentation` - deeper discussion by area

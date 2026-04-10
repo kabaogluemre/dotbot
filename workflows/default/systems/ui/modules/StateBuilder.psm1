@@ -435,8 +435,8 @@ function Get-BotState {
             }
     }
 
-    # When in-progress/ is empty, currentTask falls back to analysing/ (line 169).
-    # Exclude that task from analysing list to prevent duplicate cards in UI.
+    # When in-progress/ is empty, currentTask may fall back to a task from analysing/.
+    # Exclude that task from the analysing list to prevent duplicate cards in the UI.
     if ($currentTask -and $inProgressTasks.Count -eq 0) {
         $analysingTasksList = @($analysingTasksList | Where-Object { $_.id -ne $currentTask.id })
     }

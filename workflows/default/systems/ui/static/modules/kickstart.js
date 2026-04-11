@@ -39,71 +39,22 @@ async function initKickstart() {
         updateExecutiveSummary();
     }
 
-    // Apply workflow-driven dialog text from /api/info
+    // Apply workflow-driven dialog text from /api/info (active/default workflow).
+    // Per-workflow modals re-fetch this from /api/workflows/{name}/form via
+    // applyKickstartDialog when openKickstartModal runs (issue #235).
     try {
         const infoResp = await fetch(`${API_BASE}/api/info`);
         if (infoResp.ok) {
             const info = await infoResp.json();
-            kickstartDialog = info.kickstart_dialog || null;
-            kickstartPhases = info.kickstart_phases || [];
-            kickstartMode = info.kickstart_mode || null;
-            const dialog = kickstartDialog;
-            if (dialog) {
-                const descEl = document.getElementById('kickstart-description');
-                const labelEl = document.getElementById('kickstart-interview-label');
-                const hintEl = document.getElementById('kickstart-interview-hint');
-                const promptEl = document.getElementById('kickstart-prompt');
-                if (descEl && dialog.description) descEl.textContent = dialog.description;
-                if (labelEl && dialog.interview_label) labelEl.textContent = dialog.interview_label;
-                if (hintEl && dialog.interview_hint) hintEl.textContent = dialog.interview_hint;
-                if (promptEl && dialog.prompt_placeholder) promptEl.placeholder = dialog.prompt_placeholder;
-
-                // Workflow-driven visibility: hide sections the workflow doesn't need
-                if (dialog.show_prompt === false) {
-                    const promptGroup = promptEl?.closest('.form-group');
-                    if (promptGroup) promptGroup.style.display = 'none';
-                    if (descEl) descEl.style.display = 'none';
-                }
-                if (dialog.show_files === false) {
-                    const filesGroup = document.getElementById('kickstart-dropzone')?.closest('.form-group');
-                    if (filesGroup) filesGroup.style.display = 'none';
-                }
-                if (dialog.show_interview === false) {
-                    const interviewOption = document.getElementById('kickstart-interview')?.closest('.form-option');
-                    if (interviewOption) interviewOption.style.display = 'none';
-                }
-                if (dialog.show_auto_workflow === false) {
-                    const awOption = document.getElementById('kickstart-auto-workflow')?.closest('.form-option');
-                    if (awOption) awOption.style.display = 'none';
-                }
-            }
+            applyKickstartDialog(
+                info.kickstart_dialog || null,
+                info.kickstart_phases || [],
+                info.kickstart_mode || null
+            );
 
             // Re-render executive summary now that dialog/phases are loaded
             if (typeof updateExecutiveSummary === 'function') {
                 updateExecutiveSummary();
-            }
-
-            // Render phase checklist
-            const phases = kickstartPhases;
-            const container = document.getElementById('kickstart-phases-container');
-            const wrapper = document.getElementById('kickstart-phase-list');
-            if (container && phases.length > 0) {
-                wrapper.style.display = 'block';
-                container.innerHTML = phases.map(p => {
-                    if (p.optional) {
-                        return `<div class="phase-item">
-                            <label class="form-checkbox-label">
-                                <input type="checkbox" class="kickstart-phase-toggle" data-phase-id="${p.id}" checked>
-                                <span class="form-checkbox-text">${p.name}</span>
-                            </label>
-                        </div>`;
-                    } else {
-                        return `<div class="phase-item phase-fixed">
-                            <span class="phase-bullet">\u203a</span>
-                            <span class="form-checkbox-text">${p.name}</span>
-                        </div>`;
-                    }
-                }).join('');
             }
         }
     } catch (error) {
@@ -334,9 +285,99 @@ function renderWorkflowCardGrid(container) {
 }
 
 /**
- * Open the kickstart modal
+ * Apply a workflow's kickstart dialog config to the modal DOM.
+ *
+ * Sets description, interview label/hint, prompt placeholder, section
+ * visibility, and renders the phase checklist. Called from initKickstart
+ * (active workflow) and openKickstartModal (per-workflow lookup) so the
+ * modal always reflects the workflow the user actually selected.
+ *
+ * @param {object|null} dialog - kickstart dialog object from manifest form block
+ * @param {Array} phases - phase list converted from manifest tasks
+ * @param {object|null} mode - active form mode (kickstart_mode)
  */
-function openKickstartModal(workflowName, options) {
+function applyKickstartDialog(dialog, phases, mode) {
+    kickstartDialog = dialog || null;
+    kickstartPhases = phases || [];
+    kickstartMode = mode || null;
+
+    const descEl = document.getElementById('kickstart-description');
+    const labelEl = document.getElementById('kickstart-interview-label');
+    const hintEl = document.getElementById('kickstart-interview-hint');
+    const promptEl = document.getElementById('kickstart-prompt');
+    const promptGroup = promptEl?.closest('.form-group');
+    const filesGroup = document.getElementById('kickstart-dropzone')?.closest('.form-group');
+    const interviewOption = document.getElementById('kickstart-interview')?.closest('.form-option');
+    const awOption = document.getElementById('kickstart-auto-workflow')?.closest('.form-option');
+
+    // Reset sections to visible (in case a previous workflow hid them)
+    if (descEl) descEl.style.display = '';
+    if (promptGroup) promptGroup.style.display = '';
+    if (filesGroup) filesGroup.style.display = '';
+    if (interviewOption) interviewOption.style.display = '';
+    if (awOption) awOption.style.display = '';
+
+    if (dialog) {
+        if (descEl && dialog.description) descEl.textContent = dialog.description;
+        if (labelEl && dialog.interview_label) labelEl.textContent = dialog.interview_label;
+        if (hintEl && dialog.interview_hint) hintEl.textContent = dialog.interview_hint;
+        if (promptEl && dialog.prompt_placeholder) promptEl.placeholder = dialog.prompt_placeholder;
+
+        if (dialog.show_prompt === false) {
+            if (promptGroup) promptGroup.style.display = 'none';
+            if (descEl) descEl.style.display = 'none';
+        }
+        if (dialog.show_files === false) {
+            if (filesGroup) filesGroup.style.display = 'none';
+        }
+        if (dialog.show_interview === false) {
+            if (interviewOption) interviewOption.style.display = 'none';
+        }
+        if (dialog.show_auto_workflow === false) {
+            if (awOption) awOption.style.display = 'none';
+        }
+    }
+
+    // Render phase checklist
+    const container = document.getElementById('kickstart-phases-container');
+    const wrapper = document.getElementById('kickstart-phase-list');
+    if (container && wrapper) {
+        if (kickstartPhases.length > 0) {
+            wrapper.style.display = 'block';
+            container.innerHTML = kickstartPhases.map(p => {
+                if (p.optional) {
+                    return `<div class="phase-item">
+                        <label class="form-checkbox-label">
+                            <input type="checkbox" class="kickstart-phase-toggle" data-phase-id="${p.id}" checked>
+                            <span class="form-checkbox-text">${p.name}</span>
+                        </label>
+                    </div>`;
+                } else {
+                    return `<div class="phase-item phase-fixed">
+                        <span class="phase-bullet">\u203a</span>
+                        <span class="form-checkbox-text">${p.name}</span>
+                    </div>`;
+                }
+            }).join('');
+        } else {
+            wrapper.style.display = 'none';
+            container.innerHTML = '';
+        }
+    }
+}
+
+/**
+ * Open the kickstart modal for a specific workflow.
+ *
+ * Fetches the per-workflow form config from /api/workflows/{name}/form
+ * and applies it to the DOM before showing the modal. This ensures the
+ * modal reflects the selected workflow's form rather than the workflow
+ * loaded at page-init time (issue #235).
+ *
+ * @param {string} workflowName - The workflow name from the click context
+ * @param {object} [options] - Optional flags (e.g. { useTaskRunner: true })
+ */
+async function openKickstartModal(workflowName, options) {
     const modal = document.getElementById('kickstart-modal');
     const textarea = document.getElementById('kickstart-prompt');
 
@@ -344,9 +385,57 @@ function openKickstartModal(workflowName, options) {
     kickstartWorkflowName = workflowName || null;
     kickstartUseTaskRunner = !!(options && options.useTaskRunner);
 
+    // Show the modal immediately so the click feels responsive — the form
+    // config is fetched in parallel and applied (or reset) when it arrives.
     if (modal) {
         modal.classList.add('visible');
         setTimeout(() => textarea?.focus(), 100);
+    }
+
+    if (!workflowName) return;
+
+    // Re-fetch this workflow's form config so the modal reflects the
+    // selected workflow rather than whichever workflow was active at init.
+    // Capture the request target so rapid clicks on different workflows
+    // can discard stale responses instead of overwriting the latest one.
+    const requestedFor = workflowName;
+    let applied = false;
+    try {
+        const resp = await fetch(`${API_BASE}/api/workflows/${encodeURIComponent(workflowName)}/form`);
+        if (kickstartWorkflowName !== requestedFor) return; // superseded by a newer click
+        if (resp.ok) {
+            const data = await resp.json();
+            if (kickstartWorkflowName !== requestedFor) return;
+            if (data && data.success) {
+                applyKickstartDialog(data.dialog || null, data.phases || [], data.mode || null);
+                applied = true;
+            } else {
+                console.warn(`Workflow form lookup returned no data for "${workflowName}"`, data);
+            }
+        } else {
+            console.warn(`Workflow form lookup failed for "${workflowName}": HTTP ${resp.status}`);
+        }
+    } catch (error) {
+        if (kickstartWorkflowName !== requestedFor) return;
+        console.warn(`Could not load form config for workflow "${workflowName}":`, error);
+    }
+
+    if (!applied) {
+        // Reset the DOM to a generic placeholder state so we never silently
+        // display another workflow's configuration (the exact bug in #235).
+        applyKickstartDialog(
+            {
+                description: `Configure workflow: ${workflowName}`,
+                interview_label: '',
+                interview_hint: '',
+                prompt_placeholder: ''
+            },
+            [],
+            null
+        );
+        if (typeof showToast === 'function') {
+            showToast(`Could not load form for workflow "${workflowName}"`, 'warning', 6000);
+        }
     }
 }
 

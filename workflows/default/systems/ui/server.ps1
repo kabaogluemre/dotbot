@@ -301,6 +301,94 @@ function Add-StaticAssetVersions {
     })
 }
 
+# ---------------------------------------------------------------------------
+# Workflow form configuration helper
+# ---------------------------------------------------------------------------
+# Builds the kickstart dialog config for a workflow manifest. Used by both
+# /api/info (active/default workflow) and /api/workflows/{name}/form
+# (per-workflow lookup) so the modal can be re-populated when the user
+# selects a workflow other than the alphabetically-first one.
+function Get-WorkflowFormConfig {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProjectRoot,
+        [Parameter(Mandatory = $false)]
+        [object]$Manifest
+    )
+
+    $result = @{
+        dialog = $null
+        phases = $null
+        mode   = $null
+    }
+
+    if (-not $Manifest) { return $result }
+
+    $form = if ($Manifest -is [System.Collections.IDictionary]) { $Manifest['form'] } else { $Manifest.form }
+
+    $formModes = $null
+    if ($form) {
+        $formModes = if ($form -is [System.Collections.IDictionary]) { $form['modes'] } else { $form.modes }
+    }
+
+    $kickstartDialog = $null
+    $activeMode = $null
+
+    if ($formModes -and $formModes.Count -gt 0) {
+        foreach ($mode in $formModes) {
+            $modeCondition = if ($mode -is [System.Collections.IDictionary]) { $mode['condition'] } else { $mode.condition }
+            if (Test-ManifestCondition -ProjectRoot $ProjectRoot -Condition $modeCondition) {
+                $activeMode = @{}
+                foreach ($key in @('id', 'label', 'description', 'button', 'prompt_placeholder', 'show_interview', 'show_files', 'show_prompt', 'show_auto_workflow', 'default_prompt', 'hidden', 'interview_label', 'interview_hint')) {
+                    $val = if ($mode -is [System.Collections.IDictionary]) { $mode[$key] } else { $mode.$key }
+                    if ($null -ne $val) { $activeMode[$key] = $val }
+                }
+                $kickstartDialog = @{
+                    description    = $activeMode['description']
+                    show_prompt    = if ($null -ne $activeMode['show_prompt']) { [bool]$activeMode['show_prompt'] } else { $true }
+                    show_files     = if ($null -ne $activeMode['show_files']) { [bool]$activeMode['show_files'] } else { $true }
+                    show_interview = if ($null -ne $activeMode['show_interview']) { [bool]$activeMode['show_interview'] } else { $true }
+                    default_prompt = $activeMode['default_prompt']
+                }
+                foreach ($key in @('interview_label', 'interview_hint', 'prompt_placeholder')) {
+                    if ($activeMode[$key]) { $kickstartDialog[$key] = "$($activeMode[$key])" }
+                }
+                break
+            }
+        }
+    } elseif ($form) {
+        $formDesc = if ($form -is [System.Collections.IDictionary]) { $form['description'] } else { $form.description }
+        if ($formDesc) {
+            $formShowPrompt = if ($form -is [System.Collections.IDictionary]) { $form['show_prompt'] } else { $form.show_prompt }
+            $formShowFiles = if ($form -is [System.Collections.IDictionary]) { $form['show_files'] } else { $form.show_files }
+            $formShowInterview = if ($form -is [System.Collections.IDictionary]) { $form['show_interview'] } else { $form.show_interview }
+            $formDefaultPrompt = if ($form -is [System.Collections.IDictionary]) { $form['default_prompt'] } else { $form.default_prompt }
+            $kickstartDialog = @{
+                description    = "$formDesc"
+                show_prompt    = if ($null -ne $formShowPrompt) { [bool]$formShowPrompt } else { $true }
+                show_files     = if ($null -ne $formShowFiles) { [bool]$formShowFiles } else { $true }
+                show_interview = if ($null -ne $formShowInterview) { [bool]$formShowInterview } else { $true }
+                default_prompt = "$formDefaultPrompt"
+            }
+            foreach ($key in @('interview_label', 'interview_hint', 'prompt_placeholder')) {
+                $val = if ($form -is [System.Collections.IDictionary]) { $form[$key] } else { $form.$key }
+                if ($val) { $kickstartDialog[$key] = "$val" }
+            }
+        }
+    }
+
+    $kickstartPhases = $null
+    $tasks = if ($Manifest -is [System.Collections.IDictionary]) { $Manifest['tasks'] } else { $Manifest.tasks }
+    if ($tasks -and $tasks.Count -gt 0) {
+        $kickstartPhases = @(Convert-ManifestTasksToPhases -Tasks $tasks)
+    }
+
+    $result.dialog = $kickstartDialog
+    $result.phases = $kickstartPhases
+    $result.mode   = $activeMode
+    return $result
+}
+
 try {
     while ($listener.IsListening) {
         $context = $listener.GetContext()
@@ -401,67 +489,18 @@ try {
                         } catch { Write-BotLog -Level Debug -Message "Failed to read settings for workflow name" -Exception $_ }
                     }
 
-                    # Read kickstart dialog + phases from workflow manifest (primary source)
+                    # Read kickstart dialog + phases from workflow manifest (primary source).
+                    # Delegated to Get-WorkflowFormConfig so /api/workflows/{name}/form can
+                    # share the same logic for per-workflow lookups (issue #235).
                     $kickstartDialog = $null
                     $kickstartPhases = $null
                     $activeMode = $null
                     $manifest = Get-ActiveWorkflowManifest -BotRoot $botRoot
                     if ($manifest) {
-                        $form = $manifest.form
-
-                        # Evaluate form.modes if declared (condition-driven CTA)
-                        $formModes = $null
-                        if ($form) {
-                            $formModes = if ($form -is [System.Collections.IDictionary]) { $form['modes'] } else { $form.modes }
-                        }
-                        if ($formModes -and $formModes.Count -gt 0) {
-                            foreach ($mode in $formModes) {
-                                $modeCondition = if ($mode -is [System.Collections.IDictionary]) { $mode['condition'] } else { $mode.condition }
-                                if (Test-ManifestCondition -ProjectRoot $projectRoot -Condition $modeCondition) {
-                                    $activeMode = @{}
-                                    foreach ($key in @('id', 'label', 'description', 'button', 'prompt_placeholder', 'show_interview', 'show_files', 'show_prompt', 'show_auto_workflow', 'default_prompt', 'hidden', 'interview_label', 'interview_hint')) {
-                                        $val = if ($mode -is [System.Collections.IDictionary]) { $mode[$key] } else { $mode.$key }
-                                        if ($null -ne $val) { $activeMode[$key] = $val }
-                                    }
-                                    # Map mode fields to kickstartDialog shape for backward compat
-                                    $kickstartDialog = @{
-                                        description = $activeMode['description']
-                                        show_prompt = if ($null -ne $activeMode['show_prompt']) { [bool]$activeMode['show_prompt'] } else { $true }
-                                        show_files = if ($null -ne $activeMode['show_files']) { [bool]$activeMode['show_files'] } else { $true }
-                                        show_interview = if ($null -ne $activeMode['show_interview']) { [bool]$activeMode['show_interview'] } else { $true }
-                                        default_prompt = $activeMode['default_prompt']
-                                    }
-                                    foreach ($key in @('interview_label', 'interview_hint', 'prompt_placeholder')) {
-                                        if ($activeMode[$key]) { $kickstartDialog[$key] = "$($activeMode[$key])" }
-                                    }
-                                    break
-                                }
-                            }
-                        } elseif ($form) {
-                            # No modes — use flat form fields
-                            $formDesc = if ($form -is [System.Collections.IDictionary]) { $form['description'] } else { $form.description }
-                            if ($formDesc) {
-                                $formShowPrompt = if ($form -is [System.Collections.IDictionary]) { $form['show_prompt'] } else { $form.show_prompt }
-                                $formShowFiles = if ($form -is [System.Collections.IDictionary]) { $form['show_files'] } else { $form.show_files }
-                                $formShowInterview = if ($form -is [System.Collections.IDictionary]) { $form['show_interview'] } else { $form.show_interview }
-                                $formDefaultPrompt = if ($form -is [System.Collections.IDictionary]) { $form['default_prompt'] } else { $form.default_prompt }
-                                $kickstartDialog = @{
-                                    description = "$formDesc"
-                                    show_prompt = if ($null -ne $formShowPrompt) { [bool]$formShowPrompt } else { $true }
-                                    show_files = if ($null -ne $formShowFiles) { [bool]$formShowFiles } else { $true }
-                                    show_interview = if ($null -ne $formShowInterview) { [bool]$formShowInterview } else { $true }
-                                    default_prompt = "$formDefaultPrompt"
-                                }
-                                foreach ($key in @('interview_label', 'interview_hint', 'prompt_placeholder')) {
-                                    $val = if ($form -is [System.Collections.IDictionary]) { $form[$key] } else { $form.$key }
-                                    if ($val) { $kickstartDialog[$key] = "$val" }
-                                }
-                            }
-                        }
-                        # Phases from manifest tasks
-                        if ($manifest.tasks -and $manifest.tasks.Count -gt 0) {
-                            $kickstartPhases = @(Convert-ManifestTasksToPhases -Tasks $manifest.tasks)
-                        }
+                        $formConfig = Get-WorkflowFormConfig -ProjectRoot $projectRoot -Manifest $manifest
+                        $kickstartDialog = $formConfig.dialog
+                        $kickstartPhases = $formConfig.phases
+                        $activeMode = $formConfig.mode
                         if (-not $workflowName) { $workflowName = $manifest.name }
                     }
 
@@ -1790,6 +1829,55 @@ try {
                     $content = @{ workflows = @($installedList) } | ConvertTo-Json -Depth 5 -Compress
                     # Store in response cache
                     $script:workflowsCache = @{ data = $content; timestamp = [datetime]::UtcNow }
+                    break
+                }
+
+                { $_ -like "/api/workflows/*/form" } {
+                    if ($method -eq "GET") {
+                        $contentType = "application/json; charset=utf-8"
+                        try {
+                            $wfName = ($url -replace "^/api/workflows/", "" -replace "/form$", "")
+                            # Validate workflow name to prevent path traversal
+                            if ($wfName -notmatch '^[a-zA-Z0-9_-]+$') {
+                                $statusCode = 400
+                                $content = @{ success = $false; error = "Invalid workflow name: $wfName" } | ConvertTo-Json -Compress
+                                break
+                            }
+
+                            # Resolve workflow directory: installed workflows live at .bot/workflows/{name}/,
+                            # the default/profile workflow at .bot/ root.
+                            $wfDir = Join-Path $botRoot "workflows\$wfName"
+                            if (-not (Test-Path $wfDir)) {
+                                $defaultYaml = Join-Path $botRoot "workflow.yaml"
+                                $defaultManifest = if (Test-Path -LiteralPath $defaultYaml) { Read-WorkflowManifest -WorkflowDir $botRoot } else { $null }
+                                $defaultName = if ($defaultManifest -and $defaultManifest.name) { $defaultManifest.name } else { 'default' }
+                                if ($wfName -eq $defaultName -or $wfName -eq 'default') {
+                                    $wfDir = $botRoot
+                                }
+                            }
+
+                            if (-not (Test-Path (Join-Path $wfDir "workflow.yaml"))) {
+                                $statusCode = 404
+                                $content = @{ success = $false; error = "Workflow not found: $wfName" } | ConvertTo-Json -Compress
+                            } else {
+                                $manifest = Read-WorkflowManifest -WorkflowDir $wfDir
+                                $formConfig = Get-WorkflowFormConfig -ProjectRoot $projectRoot -Manifest $manifest
+                                $content = @{
+                                    success = $true
+                                    workflow = $wfName
+                                    dialog = $formConfig.dialog
+                                    phases = $formConfig.phases
+                                    mode = $formConfig.mode
+                                } | ConvertTo-Json -Depth 5 -Compress
+                            }
+                        } catch {
+                            $statusCode = 500
+                            $content = @{ success = $false; error = "Failed to load workflow form: $($_.Exception.Message)" } | ConvertTo-Json -Compress
+                        }
+                    } else {
+                        $statusCode = 405
+                        $content = @{ success = $false; error = "Method not allowed" } | ConvertTo-Json -Compress
+                    }
                     break
                 }
 

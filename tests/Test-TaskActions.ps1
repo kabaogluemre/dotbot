@@ -621,6 +621,287 @@ finally {
     }
 }
 
+# ─── task-get-next runtime condition evaluation (issue #226) ────────────────
+
+$testProject = $null
+$savedDotbotProjectRoot = $global:DotbotProjectRoot
+try {
+    $testProject = New-SourceBackedTestProject -RepoRoot $repoRoot
+    $botDir       = Join-Path $testProject ".bot"
+    $tasksBaseDir = Join-Path $botDir "workspace\tasks"
+    $todoDir      = Join-Path $tasksBaseDir "todo"
+    $analysedDir  = Join-Path $tasksBaseDir "analysed"
+    $skippedDir   = Join-Path $tasksBaseDir "skipped"
+
+    $global:DotbotProjectRoot = $testProject
+
+    # task-get-next/script.ps1 calls Write-BotLog, which the MCP server provides by
+    # importing DotBotLog at startup. Outside the server we have to load it ourselves
+    # before dot-sourcing the tool script.
+    $dotBotLogModule = Join-Path $botDir "systems\runtime\modules\DotBotLog.psm1"
+    if (Test-Path $dotBotLogModule) {
+        Import-Module $dotBotLogModule -Force -DisableNameChecking | Out-Null
+        $tglLogsDir = Join-Path $botDir ".control\logs"
+        $tglControlDir = Join-Path $botDir ".control"
+        if (-not (Test-Path $tglLogsDir)) { New-Item -ItemType Directory -Path $tglLogsDir -Force | Out-Null }
+        if (-not (Test-Path $tglControlDir)) { New-Item -ItemType Directory -Path $tglControlDir -Force | Out-Null }
+        if (Get-Command Initialize-DotBotLog -ErrorAction SilentlyContinue) {
+            Initialize-DotBotLog -LogDir $tglLogsDir -ControlDir $tglControlDir -ProjectRoot $testProject -ConsoleEnabled $false | Out-Null
+        }
+    }
+
+    # task-get-next's script.ps1 is not a module; we dot-source it so the test
+    # can call Invoke-TaskGetNext directly against the test project's .bot.
+    $taskGetNextScript = Join-Path $botDir "systems\mcp\tools\task-get-next\script.ps1"
+    Assert-PathExists -Name "task-get-next script exists in test project" -Path $taskGetNextScript
+    . $taskGetNextScript
+
+    Assert-True -Name "task-get-next dot-source exposes Invoke-TaskGetNext" `
+        -Condition ($null -ne (Get-Command Invoke-TaskGetNext -ErrorAction SilentlyContinue)) `
+        -Message "Expected Invoke-TaskGetNext to be defined after dot-sourcing task-get-next script"
+    Assert-True -Name "task-get-next loads Test-ManifestCondition" `
+        -Condition ($null -ne (Get-Command Test-ManifestCondition -ErrorAction SilentlyContinue)) `
+        -Message "Expected Test-ManifestCondition to be imported from workflow-manifest.ps1"
+
+    # ── Scenario A: condition references a nonexistent file → task is skipped ──
+    $missingCondPath = Join-Path $todoDir "cond-missing.json"
+    [ordered]@{
+        id = "cond-missing"
+        name = "Task with unmet condition"
+        description = "Should be skipped at runtime"
+        category = "feature"
+        priority = 10
+        effort = "S"
+        status = "todo"
+        dependencies = @()
+        condition = ".bot/workspace/product/nonexistent.md"
+        acceptance_criteria = @()
+        steps = @()
+        applicable_standards = @()
+        applicable_agents = @()
+        created_at = "2026-03-06T12:00:00Z"
+        updated_at = "2026-03-06T12:00:00Z"
+        completed_at = $null
+    } | ConvertTo-Json -Depth 10 | Set-Content -Path $missingCondPath -Encoding UTF8
+
+    Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
+    Update-TaskIndex
+
+    $resultA = Invoke-TaskGetNext -Arguments @{ prefer_analysed = $false }
+    Assert-True -Name "Invoke-TaskGetNext returns success when condition unmet" `
+        -Condition ($resultA.success -eq $true) `
+        -Message "Expected success=true, got: $($resultA | ConvertTo-Json -Depth 3)"
+    Assert-True -Name "Invoke-TaskGetNext returns no task when only candidate has unmet condition" `
+        -Condition ($null -eq $resultA.task) `
+        -Message "Expected task=null, got: $($resultA.task | ConvertTo-Json -Depth 3)"
+
+    $skippedFile = Join-Path $skippedDir "cond-missing.json"
+    Assert-PathExists -Name "Task with unmet condition is moved to skipped/" -Path $skippedFile
+    $skippedContent = Get-Content $skippedFile -Raw | ConvertFrom-Json
+    Assert-Equal -Name "Skipped task has skip_reason=condition-not-met" `
+        -Expected "condition-not-met" `
+        -Actual $skippedContent.skip_reason
+    Assert-Equal -Name "Skipped task has status=skipped" `
+        -Expected "skipped" `
+        -Actual $skippedContent.status
+
+    $missingTodoGone = -not (Test-Path $missingCondPath)
+    Assert-True -Name "Skipped task is removed from todo/" `
+        -Condition $missingTodoGone `
+        -Message "Expected todo file to be gone after skip"
+
+    # ── Scenario B: condition references an existing file → task is returned ──
+    $productDir = Join-Path $botDir "workspace\product"
+    if (-not (Test-Path $productDir)) {
+        New-Item -ItemType Directory -Path $productDir -Force | Out-Null
+    }
+    Set-Content -Path (Join-Path $productDir "mission.md") -Value "test mission" -Encoding UTF8
+
+    $metCondPath = Join-Path $todoDir "cond-met.json"
+    [ordered]@{
+        id = "cond-met"
+        name = "Task with satisfied condition"
+        description = "Should be returned at runtime"
+        category = "feature"
+        priority = 20
+        effort = "S"
+        status = "todo"
+        dependencies = @()
+        condition = ".bot/workspace/product/mission.md"
+        acceptance_criteria = @()
+        steps = @()
+        applicable_standards = @()
+        applicable_agents = @()
+        created_at = "2026-03-06T12:00:00Z"
+        updated_at = "2026-03-06T12:00:00Z"
+        completed_at = $null
+    } | ConvertTo-Json -Depth 10 | Set-Content -Path $metCondPath -Encoding UTF8
+
+    Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
+    Update-TaskIndex
+
+    $resultB = Invoke-TaskGetNext -Arguments @{ prefer_analysed = $false }
+    Assert-True -Name "Invoke-TaskGetNext returns task when condition is met" `
+        -Condition ($null -ne $resultB.task) `
+        -Message "Expected task to be returned, got null. Message: $($resultB.message)"
+    if ($resultB.task) {
+        Assert-Equal -Name "Returned task is the one with satisfied condition" `
+            -Expected "cond-met" `
+            -Actual $resultB.task.id
+    }
+    Assert-PathExists -Name "Task with satisfied condition stays in todo/" -Path $metCondPath
+
+    # Clean slate before scenarios C and D so leftover todo/skipped files
+    # don't interfere with selection.
+    Get-ChildItem -Path $todoDir -Filter "*.json" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem -Path $skippedDir -Filter "*.json" -ErrorAction SilentlyContinue | Remove-Item -Force
+
+    # Scenario C sets up its own product-file state explicitly rather than inheriting
+    # from scenario B, so the block stays valid if B is ever reordered or removed.
+    if (-not (Test-Path $productDir)) {
+        New-Item -ItemType Directory -Path $productDir -Force | Out-Null
+    }
+    Set-Content -Path (Join-Path $productDir "mission.md") -Value "test mission for scenario C" -Encoding UTF8
+    if (Test-Path (Join-Path $productDir "nope.md")) {
+        Remove-Item (Join-Path $productDir "nope.md") -Force
+    }
+
+    # ── Scenario C: array-form condition (AND semantics) ──
+    # mission.md must exist AND nope.md must NOT exist → both rules pass, task is returned.
+    $arrayCondPath = Join-Path $todoDir "cond-array.json"
+    [ordered]@{
+        id = "cond-array"
+        name = "Task with array condition"
+        description = "AND of two rules"
+        category = "feature"
+        priority = 30
+        effort = "S"
+        status = "todo"
+        dependencies = @()
+        condition = @(
+            ".bot/workspace/product/mission.md",
+            "!.bot/workspace/product/nope.md"
+        )
+        acceptance_criteria = @()
+        steps = @()
+        applicable_standards = @()
+        applicable_agents = @()
+        created_at = "2026-03-06T12:00:00Z"
+        updated_at = "2026-03-06T12:00:00Z"
+        completed_at = $null
+    } | ConvertTo-Json -Depth 10 | Set-Content -Path $arrayCondPath -Encoding UTF8
+
+    Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
+    Update-TaskIndex
+
+    $resultC1 = Invoke-TaskGetNext -Arguments @{ prefer_analysed = $false }
+    Assert-True -Name "Array condition (all rules true) returns the task" `
+        -Condition ($null -ne $resultC1.task -and $resultC1.task.id -eq 'cond-array') `
+        -Message "Expected cond-array task to be returned. Got: $($resultC1.task.id)"
+    Assert-PathExists -Name "Array-condition task stays in todo/ when all rules pass" -Path $arrayCondPath
+
+    # Now break one rule by creating the file the negated rule says must not exist.
+    Set-Content -Path (Join-Path $productDir "nope.md") -Value "boom" -Encoding UTF8
+    Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
+    Update-TaskIndex
+
+    $resultC2 = Invoke-TaskGetNext -Arguments @{ prefer_analysed = $false }
+    Assert-True -Name "Array condition (one rule false) returns no task" `
+        -Condition ($null -eq $resultC2.task) `
+        -Message "Expected no task; got: $($resultC2.task | ConvertTo-Json -Depth 3)"
+    Assert-PathExists -Name "Array-condition task moved to skipped/ when a rule fails" `
+        -Path (Join-Path $skippedDir "cond-array.json")
+    $arraySkipped = Get-Content (Join-Path $skippedDir "cond-array.json") -Raw | ConvertFrom-Json
+    Assert-Equal -Name "Array-condition skipped task records skip_reason=condition-not-met" `
+        -Expected "condition-not-met" `
+        -Actual $arraySkipped.skip_reason
+
+    # Clean up the offending file before scenario D.
+    Remove-Item (Join-Path $productDir "nope.md") -Force
+
+    # ── Scenario D: prefer_analysed=true → analysed task with unmet condition ──
+    # This is the path the issue cares about most: a task that has already passed
+    # the analysis phase (lives in analysed/) gets its condition re-evaluated at
+    # execution selection time, and is moved analysed → skipped via Move-TaskState
+    # -FromStates @('analysed').
+    if (-not (Test-Path $analysedDir)) {
+        New-Item -ItemType Directory -Path $analysedDir -Force | Out-Null
+    }
+    Get-ChildItem -Path $todoDir -Filter "*.json" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem -Path $analysedDir -Filter "*.json" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem -Path $skippedDir -Filter "*.json" -ErrorAction SilentlyContinue | Remove-Item -Force
+
+    $analysedSkipPath = Join-Path $analysedDir "cond-analysed-skip.json"
+    [ordered]@{
+        id = "cond-analysed-skip"
+        name = "Analysed task with unmet condition"
+        description = "Should be moved analysed -> skipped at selection time"
+        category = "feature"
+        priority = 10
+        effort = "S"
+        status = "analysed"
+        dependencies = @()
+        condition = ".bot/workspace/product/never-created.md"
+        acceptance_criteria = @()
+        steps = @()
+        applicable_standards = @()
+        applicable_agents = @()
+        created_at = "2026-03-06T12:00:00Z"
+        updated_at = "2026-03-06T12:00:00Z"
+        completed_at = $null
+    } | ConvertTo-Json -Depth 10 | Set-Content -Path $analysedSkipPath -Encoding UTF8
+
+    $analysedKeepPath = Join-Path $analysedDir "cond-analysed-keep.json"
+    [ordered]@{
+        id = "cond-analysed-keep"
+        name = "Analysed task with met condition"
+        description = "Should be returned"
+        category = "feature"
+        priority = 20
+        effort = "S"
+        status = "analysed"
+        dependencies = @()
+        condition = ".bot/workspace/product/mission.md"
+        acceptance_criteria = @()
+        steps = @()
+        applicable_standards = @()
+        applicable_agents = @()
+        created_at = "2026-03-06T12:00:00Z"
+        updated_at = "2026-03-06T12:00:00Z"
+        completed_at = $null
+    } | ConvertTo-Json -Depth 10 | Set-Content -Path $analysedKeepPath -Encoding UTF8
+
+    Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
+    Update-TaskIndex
+
+    # Default prefer_analysed=true. The runner picks the highest-priority analysed
+    # task first (cond-analysed-skip), discovers its condition is unmet, moves it
+    # to skipped, then re-picks and returns cond-analysed-keep.
+    $resultD = Invoke-TaskGetNext -Arguments @{}
+    Assert-True -Name "Analysed task with unmet condition is skipped, next analysed task is returned" `
+        -Condition ($null -ne $resultD.task -and $resultD.task.id -eq 'cond-analysed-keep') `
+        -Message "Expected cond-analysed-keep to be returned. Got: $($resultD.task.id); message: $($resultD.message)"
+    Assert-Equal -Name "Returned analysed task carries status=analysed" `
+        -Expected "analysed" `
+        -Actual $resultD.task.status
+
+    $analysedSkipDest = Join-Path $skippedDir "cond-analysed-skip.json"
+    Assert-PathExists -Name "Analysed task with unmet condition moved to skipped/" -Path $analysedSkipDest
+    Assert-True -Name "Analysed-skip task no longer in analysed/" `
+        -Condition (-not (Test-Path $analysedSkipPath)) `
+        -Message "Expected analysed/ source file to be removed after Move-TaskState"
+    $analysedSkipped = Get-Content $analysedSkipDest -Raw | ConvertFrom-Json
+    Assert-Equal -Name "Analysed→skipped task records skip_reason=condition-not-met" `
+        -Expected "condition-not-met" `
+        -Actual $analysedSkipped.skip_reason
+}
+finally {
+    if ($testProject) {
+        Remove-TestProject -Path $testProject
+    }
+    $global:DotbotProjectRoot = $savedDotbotProjectRoot
+}
+
 $allPassed = Write-TestSummary -LayerName "Task Action Source Tests"
 
 if (-not $allPassed) {

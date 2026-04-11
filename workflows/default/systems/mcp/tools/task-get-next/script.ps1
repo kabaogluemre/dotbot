@@ -4,6 +4,32 @@ if (-not (Get-Module TaskIndexCache)) {
     Import-Module $indexModule -Force
 }
 
+# Import task store (for Move-TaskState, used when skipping tasks whose condition is unmet)
+$taskStoreModule = Join-Path $global:DotbotProjectRoot ".bot\systems\mcp\modules\TaskStore.psm1"
+if (-not (Get-Module TaskStore)) {
+    Import-Module $taskStoreModule -Force
+}
+
+# Dot-source workflow-manifest.ps1 to get Test-ManifestCondition.
+# NOTE: matches the existing project convention (also used by Invoke-KickstartProcess.ps1,
+# ProductAPI.psm1, and ui/server.ps1). Pulls every function from workflow-manifest.ps1 into
+# scope, not just Test-ManifestCondition. TODO: extract Test-ManifestCondition into its own
+# .psm1 with Export-ModuleMember to shrink the imported surface area.
+$runtimeManifest = Join-Path $global:DotbotProjectRoot ".bot\systems\runtime\modules\workflow-manifest.ps1"
+if ((Test-Path $runtimeManifest) -and -not (Get-Command Test-ManifestCondition -ErrorAction SilentlyContinue)) {
+    . $runtimeManifest
+}
+
+# Fail loudly if Test-ManifestCondition is still unavailable. A silent fallback here would
+# reintroduce issue #226 (frozen-at-creation conditions) without any visible signal.
+# We use [Console]::Error.WriteLine (matching dotbot-mcp.ps1:103) rather than Write-BotLog
+# because this script is dot-sourced during MCP tool discovery; if DotBotLog initialization
+# was skipped (missing module / failed import), calling Write-BotLog here would throw and
+# prevent task-get-next from registering at all.
+if (-not (Get-Command Test-ManifestCondition -ErrorAction SilentlyContinue)) {
+    [Console]::Error.WriteLine("WARN: [task-get-next] Test-ManifestCondition not available after dot-sourcing '$runtimeManifest' - runtime condition checks DISABLED. Tasks with conditions will not be re-evaluated. This typically means workflow-manifest.ps1 is missing or out of date - re-run 'pwsh install.ps1' or 'dotbot init'.")
+}
+
 # Initialize index on first use
 $tasksBaseDir = Join-Path $global:DotbotProjectRoot ".bot\workspace\tasks"
 Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
@@ -24,38 +50,100 @@ function Invoke-TaskGetNext {
 
     Write-BotLog -Level Debug -Message "[task-get-next] Using cached task index (prefer_analysed: $preferAnalysed)"
 
-    $index = Get-TaskIndex
     $nextTask = $null
     $taskStatus = 'todo'
-    
+    $blockedCount = 0
+    $conditionSkipCount = 0
+    $moveFailures = @()
+
     # Priority order:
     # 1. Analysed tasks (ready for implementation, already pre-processed)
     # 2. Todo tasks (need analysis first, or legacy mode)
-    
-    $blockedCount = 0
+    #
+    # Task `condition` fields are re-evaluated here (at selection time) rather than
+    # when the task was created. Dependencies guarantee ordering, so by the time we
+    # consider a task its prerequisites have already run; if its condition is still
+    # unmet we permanently skip it and look for the next eligible task.
+    $maxIterations = 50
+    for ($iter = 0; $iter -lt $maxIterations; $iter++) {
+        $candidate = $null
+        $candidateStatus = 'todo'
 
-    if ($preferAnalysed) {
-        # Check for analysed tasks first (dependency-aware)
-        $analysedResult = Get-NextAnalysedTask -WorkflowFilter $workflowFilter
-        if ($analysedResult.Task) {
-            $nextTask = $analysedResult.Task
-            $taskStatus = 'analysed'
-            $blockedCount = $analysedResult.BlockedCount
-            Write-BotLog -Level Debug -Message "[task-get-next] Found analysed task: $($nextTask.id) ($blockedCount blocked by dependencies)"
-        } elseif ($analysedResult.BlockedCount -gt 0) {
-            Write-BotLog -Level Debug -Message "[task-get-next] All $($analysedResult.BlockedCount) analysed task(s) blocked by unmet dependencies"
+        if ($preferAnalysed) {
+            $analysedResult = Get-NextAnalysedTask -WorkflowFilter $workflowFilter
+            # Track the highest blocked count seen across iterations so that after
+            # we skip condition-unmet tasks the "no tasks available" message still
+            # reports the true number of analysed tasks blocked by dependencies.
+            if ($analysedResult.BlockedCount -gt $blockedCount) {
+                $blockedCount = $analysedResult.BlockedCount
+            }
+            if ($analysedResult.Task) {
+                $candidate = $analysedResult.Task
+                $candidateStatus = 'analysed'
+                Write-BotLog -Level Debug -Message "[task-get-next] Found analysed task: $($candidate.id) ($($analysedResult.BlockedCount) blocked by dependencies)"
+            } elseif ($analysedResult.BlockedCount -gt 0) {
+                Write-BotLog -Level Debug -Message "[task-get-next] All $($analysedResult.BlockedCount) analysed task(s) blocked by unmet dependencies"
+            }
         }
+
+        # Fallback:
+        # - prefer_analysed = true  -> try analysed first, then todo
+        # - prefer_analysed = false -> todo only (used by analysis phase)
+        if (-not $candidate) {
+            $todoCandidate = Get-NextTask -WorkflowFilter $workflowFilter
+            if ($todoCandidate) {
+                $candidate = $todoCandidate
+                $candidateStatus = 'todo'
+            }
+        }
+
+        if (-not $candidate) { break }
+
+        # Runtime condition check — re-evaluate against current filesystem state.
+        # Test-ManifestCondition availability is asserted at script load above; if it's
+        # missing here we deliberately let PowerShell raise rather than silently skipping
+        # the check (which would resurrect issue #226).
+        if ($candidate.condition) {
+            $conditionMet = Test-ManifestCondition -ProjectRoot $global:DotbotProjectRoot -Condition $candidate.condition
+            if (-not $conditionMet) {
+                $conditionText = if ($candidate.condition -is [array]) { ($candidate.condition -join ', ') } else { "$($candidate.condition)" }
+                Write-BotLog -Level Info -Message "[task-get-next] Skipped task '$($candidate.name)' ($($candidate.id)): condition not met ($conditionText)"
+                try {
+                    Move-TaskState -TaskId $candidate.id `
+                        -FromStates @($candidateStatus) `
+                        -ToState 'skipped' `
+                        -Updates @{
+                            skip_reason = 'condition-not-met'
+                            skip_detail = "Condition not met at runtime: $conditionText"
+                        } | Out-Null
+                } catch {
+                    Write-BotLog -Level Warn -Message "[task-get-next] Failed to move task $($candidate.id) to skipped" -Exception $_
+                    # Record for the caller so a stuck task doesn't masquerade as an
+                    # empty queue — the returned status message will flag it.
+                    $moveFailures += "$($candidate.id) ($($candidate.name))"
+                    # Avoid infinite loop if the move fails — return no task rather than re-picking the same one.
+                    break
+                }
+                $conditionSkipCount++
+                # TODO: incrementalise. Update-TaskIndex rescans the entire tasks tree
+                # on every skip (O(N·skips)). Acceptable under the 50-iteration cap and
+                # typical queue sizes, but a targeted remove/move helper on the index
+                # would be cheaper. Tracked alongside the TaskIndexCache refactor.
+                Update-TaskIndex
+                continue
+            }
+        }
+
+        $nextTask = $candidate
+        $taskStatus = $candidateStatus
+        break
     }
 
-    # Fallback behavior:
-    # - prefer_analysed = true  -> try analysed first, then todo
-    # - prefer_analysed = false -> todo only (used by analysis phase)
-    if (-not $nextTask) {
-        $nextTask = Get-NextTask -WorkflowFilter $workflowFilter
-        if ($nextTask) {
-            $taskStatus = 'todo'
-        }
+    if ($iter -ge $maxIterations) {
+        Write-BotLog -Level Warn -Message "[task-get-next] Hit maxIterations cap ($maxIterations) while skipping tasks with unmet conditions; aborting selection. This usually indicates a stuck task in the queue or a Move-TaskState failure — inspect .bot/workspace/tasks/ for orphans."
     }
+
+    $index = Get-TaskIndex
 
     if (-not $nextTask) {
         # Check if there are tasks in other states that might explain why nothing is available
@@ -72,6 +160,12 @@ function Invoke-TaskGetNext {
         if ($needsInputCount -gt 0) {
             $statusMessage += " $needsInputCount task(s) waiting for input."
         }
+        if ($conditionSkipCount -gt 0) {
+            $statusMessage += " $conditionSkipCount task(s) skipped (condition not met)."
+        }
+        if ($moveFailures.Count -gt 0) {
+            $statusMessage += " WARNING: $($moveFailures.Count) task(s) stuck (Move-TaskState failed): $($moveFailures -join ', '). Inspect logs and .bot/workspace/tasks/."
+        }
 
         Write-BotLog -Level Debug -Message "[task-get-next] No eligible tasks found"
         return @{
@@ -81,6 +175,8 @@ function Invoke-TaskGetNext {
             analysing_count = $analysingCount
             needs_input_count = $needsInputCount
             blocked_count = $blockedCount
+            condition_skip_count = $conditionSkipCount
+            move_failures = $moveFailures
         }
     }
 

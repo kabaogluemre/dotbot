@@ -342,4 +342,6 @@ function Invoke-SplitTransitionFromNotification {
 Export-ModuleMember -Function @(
     'Initialize-NotificationPoller'
     'Invoke-NotificationPollTick'
+    'Invoke-SplitTransitionFromNotification'
+    'Invoke-TaskTransitionFromNotification'
 )

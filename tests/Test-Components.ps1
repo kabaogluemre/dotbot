@@ -1599,20 +1599,23 @@ if (Test-Path $notifModule) {
         project_name = "test-proj"; project_description = "desc"; instance_id = ""
     }
     $templateCapture = $null
-    $splitTemplateResult = & {
-        function Invoke-RestMethod {
-            param([string]$Method = 'Get', [string]$Uri, [string]$Body, $Headers, $ContentType, $TimeoutSec)
-            if ($Uri -match '/api/templates$') {
-                $script:templateCapture = $Body | ConvertFrom-Json
-                return @{}
-            }
-            if ($Uri -match '/api/instances$') {
-                return @{}
-            }
-            throw "Unexpected URI: $Uri"
+    function global:Invoke-RestMethod {
+        param([string]$Method = 'Get', [string]$Uri, [string]$Body, $Headers, $ContentType, $TimeoutSec)
+        if ($Uri -match '/api/templates$') {
+            $global:templateCapture = $Body | ConvertFrom-Json
+            return @{}
         }
-        Send-SplitProposalNotification -TaskContent $mockSplitTask -SplitProposal $mockSplitProposal -Settings $enabledSettings
+        if ($Uri -match '/api/instances$') {
+            return @{}
+        }
+        throw "Unexpected URI: $Uri"
     }
+    $splitTemplateResult = try {
+        Send-SplitProposalNotification -TaskContent $mockSplitTask -SplitProposal $mockSplitProposal -Settings $enabledSettings
+    } finally {
+        Remove-Item -Path 'function:global:Invoke-RestMethod' -ErrorAction SilentlyContinue
+    }
+    $templateCapture = $global:templateCapture
     Assert-True -Name "Send-SplitProposalNotification returns success with mock server" `
         -Condition ($splitTemplateResult.success -eq $true) `
         -Message "Expected success=true, got: $($splitTemplateResult | ConvertTo-Json -Depth 5)"

@@ -800,6 +800,19 @@ if (Test-Path $serverFile) {
     Assert-True -Name "Briefing file upload uses safe filename sanitization" `
         -Condition ($serverContent -match 'GetInvalidFileNameChars') `
         -Message "File upload does not sanitize filenames with GetInvalidFileNameChars"
+
+    # Regression: the /api/workflows/*/run handler previously assigned its success
+    # payload to a local `$response` variable, shadowing the outer HttpListenerResponse
+    # and causing the response to never be written back to the client.
+    # The handler must use a distinct variable name (e.g. $runResponse) for its payload.
+    $runHandlerMatch = [regex]::Match(
+        $serverContent,
+        "Start-ProcessLaunch -Type 'task-runner'[\s\S]{0,2000}?ConvertTo-Json",
+        'Singleline'
+    )
+    Assert-True -Name "Workflow run handler does not shadow `$response HttpListenerResponse" `
+        -Condition ($runHandlerMatch.Success -and -not ($runHandlerMatch.Value -match '\$response\s*=\s*@\{')) `
+        -Message "Handler assigns to `$response, shadowing the outer HttpListenerResponse and breaking the write loop"
 } else {
     Write-TestResult -Name "server.ps1 form data tests" -Status Skip -Message "Server file not found"
 }

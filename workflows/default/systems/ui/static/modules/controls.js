@@ -678,7 +678,7 @@ function renderWorkflowControls(workflows) {
         const led = row.querySelector('.wf-led');
         if (led) led.id = `wf-led-${wf.name}`;
         const runBtn = row.querySelector('.wf-run-btn');
-        if (runBtn) runBtn.addEventListener('click', () => runWorkflow(wf.name, wf.has_form));
+        if (runBtn) runBtn.addEventListener('click', () => runWorkflow(wf.name, wf.has_form, runBtn));
         const stopBtn = row.querySelector('.wf-stop-btn');
         if (stopBtn) stopBtn.addEventListener('click', () => stopWorkflow(wf.name));
     });
@@ -689,17 +689,33 @@ function renderWorkflowControls(workflows) {
  * If the workflow has a form (show_interview/show_files), open the kickstart modal instead.
  * @param {string} name - Workflow name
  * @param {boolean} hasForm - Whether the workflow defines a form requiring user input
+ * @param {HTMLElement} [runBtn] - The Run button element; disabled during the call to guard against rapid double-clicks.
  */
-async function runWorkflow(name, hasForm) {
+async function runWorkflow(name, hasForm, runBtn) {
+    // Guard against rapid double-clicks: disable the Run button immediately.
+    // For form workflows, the modal's own submit guard takes over once it opens.
+    // For no-form workflows, we re-enable in the finally block after the fetch.
+    if (runBtn) {
+        if (runBtn.disabled) return;
+        runBtn.disabled = true;
+    }
+
     // If workflow has a form, open the kickstart modal so the user can provide
     // project context and upload files before tasks are created.
     // The modal submission routes to the task-runner engine (not kickstart).
     if (hasForm) {
         if (typeof openKickstartModal === 'function') {
-            openKickstartModal(name, { useTaskRunner: true });
+            try {
+                await openKickstartModal(name, { useTaskRunner: true });
+            } finally {
+                // Re-enable the row button once the modal is open — the modal
+                // has its own in-flight guard from here on.
+                if (runBtn) runBtn.disabled = false;
+            }
         } else {
             console.warn('Workflow requires a form but kickstart modal is not available');
             showToast('Kickstart modal is not available', 'warning');
+            if (runBtn) runBtn.disabled = false;
         }
         return;
     }
@@ -721,6 +737,8 @@ async function runWorkflow(name, hasForm) {
     } catch (error) {
         console.error('Run workflow error:', error);
         showSignalFeedback(`Error: ${error.message}`);
+    } finally {
+        if (runBtn) runBtn.disabled = false;
     }
 }
 

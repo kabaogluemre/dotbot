@@ -16,6 +16,7 @@ let roadmapPolling = null;     // interval ID for task creation detection
 let kickstartDialog = null;    // workflow-driven dialog config from /api/info
 let kickstartPhases = [];      // workflow-driven phases from /api/info
 let kickstartMode = null;      // server-evaluated form mode from workflow manifest
+let kickstartSubmitting = false; // in-flight guard against double submit
 
 /**
  * Initialize kickstart functionality
@@ -364,6 +365,7 @@ function closeKickstartModal() {
         kickstartFiles = [];
         kickstartWorkflowName = null;
         kickstartUseTaskRunner = false;
+        kickstartSubmitting = false;
         updateFileList();
         const interviewCheckbox = document.getElementById('kickstart-interview');
         if (interviewCheckbox) interviewCheckbox.checked = true;
@@ -483,27 +485,34 @@ async function submitKickstart() {
         return;
     }
 
-    // Set loading state
+    // In-flight guard: prevent double submit while a previous request is still pending
+    if (kickstartSubmitting) {
+        return;
+    }
+    kickstartSubmitting = true;
+
+    // Set loading state — keep the form visible with a disabled-looking submit button
+    // while we decide whether preflight needs to run. This avoids a jarring
+    // form → preflight → form flicker when no preflight checks are configured.
     if (submitBtn) {
         submitBtn.classList.add('loading');
         submitBtn.disabled = true;
     }
 
-    // Show preflight modal immediately with "Checking..." state
-    showPreflightPhaseChecking(prompt, needsInterview, autoWorkflow, skipPhases);
-
     try {
-        // Fetch preflight checks in background
+        // Fetch preflight checks in background — form phase is still visible
         const preResp = await fetch(`${API_BASE}/api/product/preflight`);
         const preflight = await preResp.json();
         const checks = preflight.checks || [];
 
         if (checks.length === 0) {
-            // No preflight configured — go straight to kickstart
-            resetToFormPhase();
+            // No preflight configured — skip the preflight phase entirely and
+            // go straight to kickstart. The form stays visible with the submit
+            // button disabled until executeKickstart resolves and closes the modal.
             await executeKickstart(prompt, needsInterview, autoWorkflow, skipPhases);
         } else {
-            // Update preflight phase with real results and animate
+            // Swap to the preflight phase now that we know we actually have checks to animate
+            showPreflightPhaseChecking(prompt, needsInterview, autoWorkflow, skipPhases);
             updatePreflightWithResults(checks, preflight.success, prompt, needsInterview, autoWorkflow, skipPhases);
         }
     } catch (error) {
@@ -514,6 +523,7 @@ async function submitKickstart() {
             submitBtn.classList.remove('loading');
             submitBtn.disabled = false;
         }
+        kickstartSubmitting = false;
     }
 }
 
@@ -552,6 +562,7 @@ async function executeKickstart(prompt, needsInterview, autoWorkflow, skipPhases
                     submitBtn.classList.remove('loading');
                     submitBtn.disabled = false;
                 }
+                kickstartSubmitting = false;
             }
         } catch (error) {
             console.error('Error starting workflow via task-runner:', error);
@@ -560,6 +571,7 @@ async function executeKickstart(prompt, needsInterview, autoWorkflow, skipPhases
                 submitBtn.classList.remove('loading');
                 submitBtn.disabled = false;
             }
+            kickstartSubmitting = false;
         }
         return;
     }
@@ -604,6 +616,7 @@ async function executeKickstart(prompt, needsInterview, autoWorkflow, skipPhases
                 submitBtn.classList.remove('loading');
                 submitBtn.disabled = false;
             }
+            kickstartSubmitting = false;
         }
     } catch (error) {
         console.error('Error starting kickstart:', error);
@@ -612,6 +625,7 @@ async function executeKickstart(prompt, needsInterview, autoWorkflow, skipPhases
             submitBtn.classList.remove('loading');
             submitBtn.disabled = false;
         }
+        kickstartSubmitting = false;
     }
 }
 

@@ -1895,15 +1895,17 @@ try {
 
                                 # Start-ProcessLaunch auto-detects max_concurrent for workflow type
                                 $launchResult = Start-ProcessLaunch -Type 'task-runner' -Continue $true -Description "Workflow: $wfName" -WorkflowName $wfName
-                                $response = @{
+                                # NOTE: do not assign to $response here — that variable holds the HttpListenerResponse
+                                # used by the outer write loop. Shadowing it causes the response to never be sent.
+                                $runResponse = @{
                                     success = $true
                                     workflow = $wfName
                                     tasks_created = $createdTasks.Count
                                     slots_launched = $launchResult.slots_launched
                                     process_id = $launchResult.process_id
                                 }
-                                if ($failedFiles -gt 0) { $response.files_failed = $failedFiles }
-                                $content = $response | ConvertTo-Json -Compress
+                                if ($failedFiles -gt 0) { $runResponse.files_failed = $failedFiles }
+                                $content = $runResponse | ConvertTo-Json -Compress
                             }
                         } catch {
                             $statusCode = 500

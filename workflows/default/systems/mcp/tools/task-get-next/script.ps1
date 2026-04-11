@@ -10,11 +10,10 @@ if (-not (Get-Module TaskStore)) {
     Import-Module $taskStoreModule -Force
 }
 
-# Dot-source workflow-manifest.ps1 for Test-ManifestCondition.
-# TODO: extract Test-ManifestCondition into its own .psm1 — dot-source pulls every function.
-$runtimeManifest = Join-Path $global:DotbotProjectRoot ".bot\systems\runtime\modules\workflow-manifest.ps1"
-if ((Test-Path $runtimeManifest) -and -not (Get-Command Test-ManifestCondition -ErrorAction SilentlyContinue)) {
-    . $runtimeManifest
+# Import ManifestCondition module for Test-ManifestCondition
+$manifestConditionModule = Join-Path $global:DotbotProjectRoot ".bot\systems\runtime\modules\ManifestCondition.psm1"
+if (-not (Get-Module ManifestCondition)) {
+    Import-Module $manifestConditionModule -Force
 }
 
 # Fail loud if still missing — silent fallback would resurrect #226. Stderr (not Write-BotLog)

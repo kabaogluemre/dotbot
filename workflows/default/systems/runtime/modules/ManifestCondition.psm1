@@ -45,7 +45,9 @@ function Test-ManifestCondition {
         # Path traversal guard: resolved path must stay within project root.
         $resolvedFull = [System.IO.Path]::GetFullPath($fullPath)
         if (-not $resolvedFull.StartsWith($resolvedRoot)) {
-            Write-Warning "[ManifestCondition] Path traversal blocked: '$rule' resolves outside project root."
+            if (Get-Command Write-BotLog -ErrorAction SilentlyContinue) {
+                Write-BotLog -Level Warn -Message "[ManifestCondition] Path traversal blocked: '$rule' resolves outside project root."
+            }
             return $false
         }
 

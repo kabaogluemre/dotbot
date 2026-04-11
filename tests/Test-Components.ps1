@@ -1557,6 +1557,351 @@ if (Test-Path $notifModule) {
 }
 
 # ═══════════════════════════════════════════════════════════════════
+# MERGE CONFLICT ESCALATION MODULE TESTS (issue #224)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host ""
+Write-Host "--- MergeConflictEscalation Module ---" -ForegroundColor Cyan
+
+$mergeEscModule = Join-Path $botDir "systems\runtime\modules\MergeConflictEscalation.psm1"
+
+if (Test-Path $mergeEscModule) {
+    Import-Module $mergeEscModule -Force
+
+    # Ensure the helper is exported
+    $cmd = Get-Command Move-TaskToMergeConflictNeedsInput -ErrorAction SilentlyContinue
+    Assert-True -Name "Move-TaskToMergeConflictNeedsInput is exported" `
+        -Condition ($null -ne $cmd) `
+        -Message "Expected exported function"
+
+    # Build an isolated workspace with a fake done/ task
+    $mceWorkspace = Join-Path ([System.IO.Path]::GetTempPath()) "dotbot-mce-$([System.Guid]::NewGuid().ToString().Substring(0,8))"
+    $mceDone = Join-Path $mceWorkspace "done"
+    $mceNeedsInput = Join-Path $mceWorkspace "needs-input"
+    New-Item -ItemType Directory -Force -Path $mceDone | Out-Null
+
+    $fakeTaskId = "abc12345"
+    # Seed an open execution session on the task so the session-close path is
+    # actually exercised. The runtime parent nulls $env:CLAUDE_SESSION_ID before
+    # the squash-merge step, so the helper must source the session id from
+    # $taskContent.execution_sessions, NOT from the env var.
+    $fakeTaskJson = @{
+        id                 = $fakeTaskId
+        name               = "Fake merge-conflict task"
+        status             = "done"
+        created_at         = "2026-04-11T00:00:00.0000000Z"
+        updated_at         = "2026-04-11T00:00:00.0000000Z"
+        execution_sessions = @(
+            @{ id = "exec-session-1"; started_at = "2026-04-11T00:00:01Z"; ended_at = $null }
+        )
+    } | ConvertTo-Json -Depth 10
+    $fakeTaskFile = Join-Path $mceDone "$fakeTaskId.json"
+    Set-Content -Path $fakeTaskFile -Value $fakeTaskJson -Encoding UTF8
+
+    # NB: PSCustomObject branch of conflict_files extraction is defensive only —
+    # Complete-TaskWorktree returns a [hashtable] in production (WorktreeManager.psm1
+    # 652/707/747/771/816/909/917). The hashtable regression test below is the one
+    # that pins production behaviour.
+    $fakeMergeResult = [PSCustomObject]@{
+        success        = $false
+        message        = "conflict in 2 files"
+        conflict_files = @("src/foo.cs", "src/bar.cs")
+    }
+    $fakeWorktreePath = "C:\worktrees\dotbot\task-$fakeTaskId-fake"
+
+    # Point DotbotProjectRoot at the isolated temp workspace that has no `.bot/` —
+    # `Test-Path` on NotificationClient.psm1 fails, so the notification branch short-circuits
+    # to notified=$false deterministically, regardless of the developer's $testProject config.
+    $savedDotbotRoot = $global:DotbotProjectRoot
+    $savedSessionEnv = $env:CLAUDE_SESSION_ID
+    $global:DotbotProjectRoot = $mceWorkspace
+    $env:CLAUDE_SESSION_ID = $null
+
+    try {
+        $result = Move-TaskToMergeConflictNeedsInput `
+            -TaskId $fakeTaskId `
+            -TasksBaseDir $mceWorkspace `
+            -MergeResult $fakeMergeResult `
+            -WorktreePath $fakeWorktreePath
+
+        Assert-True -Name "Move-TaskToMergeConflictNeedsInput returns success" `
+            -Condition ($result.success -eq $true) `
+            -Message "Expected success=true"
+
+        Assert-True -Name "Task file moved out of done/" `
+            -Condition (-not (Test-Path $fakeTaskFile)) `
+            -Message "Original file still exists in done/"
+
+        $newPath = Join-Path $mceNeedsInput "$fakeTaskId.json"
+        Assert-True -Name "Task file created in needs-input/" `
+            -Condition (Test-Path $newPath) `
+            -Message "Expected file at $newPath"
+
+        if (Test-Path $newPath) {
+            $moved = Get-Content $newPath -Raw | ConvertFrom-Json
+
+            Assert-True -Name "Status transitioned to needs-input" `
+                -Condition ($moved.status -eq "needs-input") `
+                -Message "Expected status=needs-input, got $($moved.status)"
+
+            Assert-True -Name "pending_question.id is merge-conflict" `
+                -Condition ($moved.pending_question.id -eq "merge-conflict") `
+                -Message "Expected id=merge-conflict"
+
+            Assert-True -Name "pending_question has 3 options (A/B/C)" `
+                -Condition (@($moved.pending_question.options).Count -eq 3) `
+                -Message "Expected 3 options, got $(@($moved.pending_question.options).Count)"
+
+            $keys = @($moved.pending_question.options | ForEach-Object { $_.key }) -join ","
+            Assert-True -Name "pending_question option keys are A,B,C" `
+                -Condition ($keys -eq "A,B,C") `
+                -Message "Expected A,B,C, got $keys"
+
+            Assert-True -Name "pending_question recommendation is A" `
+                -Condition ($moved.pending_question.recommendation -eq "A") `
+                -Message "Expected recommendation=A"
+
+            Assert-True -Name "pending_question context includes conflict files" `
+                -Condition ($moved.pending_question.context -match "src/foo\.cs" -and $moved.pending_question.context -match "src/bar\.cs") `
+                -Message "Expected conflict file names in context"
+
+            Assert-True -Name "pending_question context includes worktree path" `
+                -Condition ($moved.pending_question.context -match [regex]::Escape($fakeWorktreePath)) `
+                -Message "Expected worktree path in context"
+        }
+
+        # No .bot/ under $mceWorkspace → NotificationClient not found → notified=$false deterministically
+        Assert-True -Name "Escalation reports notified=false when NotificationClient absent" `
+            -Condition ($result.notified -eq $false) `
+            -Message "Expected notified=false when .bot/systems/mcp/modules/NotificationClient.psm1 is missing"
+
+        Assert-True -Name "Escalation reason is 'NotificationClient module not found'" `
+            -Condition ($result.notification_reason -eq "NotificationClient module not found") `
+            -Message "Expected reason='NotificationClient module not found', got '$($result.notification_reason)'"
+
+        # notification_silent must be $true for a project that hasn't opted in,
+        # so the wrapper's call sites stay quiet on every escalation.
+        Assert-True -Name "Escalation reports notification_silent=true when no module" `
+            -Condition ($result.notification_silent -eq $true) `
+            -Message "Expected notification_silent=true (project never opted in)"
+
+        # Session-close: when SessionTracking.psm1 is unavailable under the temp
+        # workspace, the helper must NOT throw and must still complete the file
+        # move. The execution_sessions array must therefore survive untouched
+        # (still exists, still has the open entry) — the close-with-module branch
+        # is exercised explicitly in the notified=$true block below by stubbing
+        # SessionTracking alongside NotificationClient.
+        if (Test-Path $newPath) {
+            $movedNoSession = Get-Content $newPath -Raw | ConvertFrom-Json
+            Assert-True -Name "Session-close: helper survives missing SessionTracking module" `
+                -Condition ($movedNoSession.execution_sessions -and @($movedNoSession.execution_sessions).Count -eq 1) `
+                -Message "Expected execution_sessions to survive helper run"
+        }
+
+        # Missing-task case: calling again with a task id that is no longer in done/
+        $missingResult = Move-TaskToMergeConflictNeedsInput `
+            -TaskId "does-not-exist" `
+            -TasksBaseDir $mceWorkspace `
+            -MergeResult $fakeMergeResult `
+            -WorktreePath $fakeWorktreePath
+        Assert-True -Name "Missing task returns success=false" `
+            -Condition ($missingResult.success -eq $false) `
+            -Message "Expected success=false when task file not found in done/"
+
+        # --- Regression: hashtable shape (matches Complete-TaskWorktree's real return) ---
+        # Previously the helper probed $MergeResult.PSObject.Properties['conflict_files'],
+        # which is $null for [hashtable], so conflict_files were silently dropped from the
+        # pending_question context and from the Teams card. (issue #224 review defect #2)
+        $fakeTaskId2 = "hash1234"
+        $fakeTaskJson2 = @{
+            id         = $fakeTaskId2
+            name       = "Fake hashtable merge-conflict task"
+            status     = "done"
+            created_at = "2026-04-11T00:00:00.0000000Z"
+            updated_at = "2026-04-11T00:00:00.0000000Z"
+        } | ConvertTo-Json -Depth 10
+        $fakeTaskFile2 = Join-Path $mceDone "$fakeTaskId2.json"
+        Set-Content -Path $fakeTaskFile2 -Value $fakeTaskJson2 -Encoding UTF8
+
+        $fakeMergeResultHashtable = @{
+            success        = $false
+            message        = "conflict in 2 files"
+            conflict_files = @("src/hash-foo.cs", "src/hash-bar.cs")
+        }
+        $fakeWorktreePath2 = "C:\worktrees\dotbot\task-$fakeTaskId2-fake"
+
+        $resultHash = Move-TaskToMergeConflictNeedsInput `
+            -TaskId $fakeTaskId2 `
+            -TasksBaseDir $mceWorkspace `
+            -MergeResult $fakeMergeResultHashtable `
+            -WorktreePath $fakeWorktreePath2
+
+        Assert-True -Name "Hashtable MergeResult: escalation returns success" `
+            -Condition ($resultHash.success -eq $true) `
+            -Message "Expected success=true for hashtable shape"
+
+        $newPath2 = Join-Path $mceNeedsInput "$fakeTaskId2.json"
+        if (Test-Path $newPath2) {
+            $movedHash = Get-Content $newPath2 -Raw | ConvertFrom-Json
+            Assert-True -Name "Hashtable MergeResult: context includes both conflict files" `
+                -Condition ($movedHash.pending_question.context -match "src/hash-foo\.cs" -and $movedHash.pending_question.context -match "src/hash-bar\.cs") `
+                -Message "Expected hashtable conflict_files to appear in pending_question.context (regression for issue #224 review defect #2)"
+        } else {
+            Write-TestResult -Name "Hashtable MergeResult: task file created in needs-input/" -Status Fail -Message "Expected file at $newPath2"
+        }
+
+        # --- notified=$true path: stub NotificationClient under the temp root ---
+        # Materialise a fake .bot/systems/mcp/modules/NotificationClient.psm1 so the
+        # helper's Test-Path succeeds and Send-TaskNotification returns a canned
+        # success payload. This is the direct unit-level guarantee for issue #224:
+        # without it, the entire success branch (Add-Member notification, second
+        # JSON write, notification metadata persistence) would be untested.
+        $stubModulesDir = Join-Path $mceWorkspace ".bot\systems\mcp\modules"
+        New-Item -ItemType Directory -Force -Path $stubModulesDir | Out-Null
+        $stubModulePath = Join-Path $stubModulesDir "NotificationClient.psm1"
+        $stubModuleContent = @'
+function Get-NotificationSettings {
+    return [pscustomobject]@{ enabled = $true }
+}
+function Send-TaskNotification {
+    param($TaskContent, $PendingQuestion)
+    return @{
+        success     = $true
+        question_id = 'q-test'
+        instance_id = 'i-test'
+        channel     = 'teams'
+        project_id  = 'p-test'
+    }
+}
+Export-ModuleMember -Function 'Get-NotificationSettings','Send-TaskNotification'
+'@
+        Set-Content -Path $stubModulePath -Value $stubModuleContent -Encoding UTF8
+
+        # Also stub SessionTracking.psm1 so the helper's session-close branch is
+        # exercised end-to-end (review defect #1: helper used to read $env:CLAUDE_SESSION_ID
+        # which is always null in the runtime parent — must source from execution_sessions).
+        $stubSessionPath = Join-Path $stubModulesDir "SessionTracking.psm1"
+        $stubSessionContent = @'
+function Close-SessionOnTask {
+    param($TaskContent, $SessionId, $Phase)
+    if (-not $SessionId) { return }
+    $arrayName = "${Phase}_sessions"
+    if (-not $TaskContent.PSObject.Properties[$arrayName]) { return }
+    foreach ($s in $TaskContent.$arrayName) {
+        if ($s.id -eq $SessionId -and -not $s.ended_at) {
+            $s | Add-Member -NotePropertyName ended_at -NotePropertyValue '2026-04-11T12:34:56Z' -Force
+            break
+        }
+    }
+}
+Export-ModuleMember -Function 'Close-SessionOnTask'
+'@
+        Set-Content -Path $stubSessionPath -Value $stubSessionContent -Encoding UTF8
+
+        # Seed the task with an open execution session so Close-SessionOnTask has
+        # a target. Note: NO $env:CLAUDE_SESSION_ID — the helper must source the
+        # session id from execution_sessions only.
+        $fakeTaskId3 = "notif001"
+        $fakeTaskJson3 = @{
+            id                 = $fakeTaskId3
+            name               = "Fake notify merge-conflict task"
+            status             = "done"
+            created_at         = "2026-04-11T00:00:00Z"
+            updated_at         = "2026-04-11T00:00:00Z"
+            execution_sessions = @(
+                @{ id = "exec-notif-001"; started_at = "2026-04-11T00:00:01Z"; ended_at = $null }
+            )
+        } | ConvertTo-Json -Depth 10
+        $fakeTaskFile3 = Join-Path $mceDone "$fakeTaskId3.json"
+        Set-Content -Path $fakeTaskFile3 -Value $fakeTaskJson3 -Encoding UTF8
+
+        # Env var already nulled and captured by the outer block — do not re-capture
+        # here or the finally would wipe the developer's real shell var.
+
+        $resultNotif = Move-TaskToMergeConflictNeedsInput `
+            -TaskId $fakeTaskId3 `
+            -TasksBaseDir $mceWorkspace `
+            -MergeResult $fakeMergeResult `
+            -WorktreePath $fakeWorktreePath
+
+        Assert-True -Name "Notified path: escalation returns success" `
+            -Condition ($resultNotif.success -eq $true) `
+            -Message "Expected success=true"
+
+        Assert-True -Name "Notified path: notified=true" `
+            -Condition ($resultNotif.notified -eq $true) `
+            -Message "Expected notified=true when NotificationClient stub returns success"
+
+        Assert-True -Name "Notified path: reason is 'Notification dispatched'" `
+            -Condition ($resultNotif.notification_reason -eq "Notification dispatched") `
+            -Message "Expected notification_reason='Notification dispatched', got '$($resultNotif.notification_reason)'"
+
+        $newPath3 = Join-Path $mceNeedsInput "$fakeTaskId3.json"
+        if (Test-Path $newPath3) {
+            $movedNotif = Get-Content $newPath3 -Raw | ConvertFrom-Json
+
+            Assert-True -Name "Notified path: notification.question_id persisted" `
+                -Condition ($movedNotif.notification.question_id -eq "q-test") `
+                -Message "Expected notification.question_id='q-test'"
+
+            Assert-True -Name "Notified path: notification.channel persisted" `
+                -Condition ($movedNotif.notification.channel -eq "teams") `
+                -Message "Expected notification.channel='teams'"
+
+            Assert-True -Name "Notified path: notification.instance_id persisted" `
+                -Condition ($movedNotif.notification.instance_id -eq "i-test") `
+                -Message "Expected notification.instance_id='i-test'"
+
+            # Timestamp format guard for review defect #2 — second-precision, trailing Z.
+            # NB: ConvertFrom-Json auto-coerces ISO 8601 strings to [datetime], which then
+            # round-trips through local culture and breaks the regex. Pin the *on-disk*
+            # serialised form by grepping the raw JSON text instead.
+            $rawNotifJson = Get-Content $newPath3 -Raw
+            $tsPattern = '"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"'
+            Assert-True -Name "Notified path: notification.sent_at is second-precision (on disk)" `
+                -Condition ($rawNotifJson -match "(?s)`"sent_at`"\s*:\s*$tsPattern") `
+                -Message "Expected sent_at to be serialised as second-precision UTC string"
+
+            Assert-True -Name "Notified path: pending_question.asked_at is second-precision (on disk)" `
+                -Condition ($rawNotifJson -match "(?s)`"asked_at`"\s*:\s*$tsPattern") `
+                -Message "Expected asked_at to be serialised as second-precision UTC string"
+
+            # Session-close: helper must have stamped ended_at on the open
+            # execution_sessions entry by sourcing its id from the task content
+            # (NOT from $env:CLAUDE_SESSION_ID, which is empty in this test).
+            $execSessions = @($movedNotif.execution_sessions)
+            Assert-True -Name "Session-close: execution_sessions still has 1 entry" `
+                -Condition ($execSessions.Count -eq 1) `
+                -Message "Expected single execution session entry"
+
+            if ($execSessions.Count -eq 1) {
+                Assert-True -Name "Session-close: ended_at populated on previously-open session" `
+                    -Condition ($null -ne $execSessions[0].ended_at -and "$($execSessions[0].ended_at)") `
+                    -Message "Expected ended_at to be set after escalation; got '$($execSessions[0].ended_at)'"
+
+                Assert-True -Name "Session-close: id matches the seeded open session" `
+                    -Condition ($execSessions[0].id -eq "exec-notif-001") `
+                    -Message "Expected id=exec-notif-001, got '$($execSessions[0].id)'"
+            }
+        } else {
+            Write-TestResult -Name "Notified path: task file created in needs-input/" -Status Fail -Message "Expected file at $newPath3"
+        }
+
+    } finally {
+        # Unload the stub so it cannot leak into later tests that rely on the real module.
+        # Must run in finally: $ErrorActionPreference=Stop means any assertion failure
+        # above would otherwise skip cleanup and shadow the real NotificationClient
+        # in subsequent tests.
+        Remove-Module NotificationClient -Force -ErrorAction SilentlyContinue
+        Remove-Module SessionTracking -Force -ErrorAction SilentlyContinue
+        if ($null -ne $savedSessionEnv) { $env:CLAUDE_SESSION_ID = $savedSessionEnv } else { Remove-Item Env:CLAUDE_SESSION_ID -ErrorAction SilentlyContinue }
+        $global:DotbotProjectRoot = $savedDotbotRoot
+        Remove-Item -Path $mceWorkspace -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} else {
+    Write-TestResult -Name "MergeConflictEscalation module exists" -Status Fail -Message "Module not found at $mergeEscModule"
+}
+
+# ═══════════════════════════════════════════════════════════════════
 # NOTIFICATION POLLER MODULE TESTS
 # ═══════════════════════════════════════════════════════════════════
 Write-Host ""

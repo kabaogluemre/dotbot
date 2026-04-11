@@ -635,9 +635,7 @@ try {
 
     $global:DotbotProjectRoot = $testProject
 
-    # task-get-next/script.ps1 calls Write-BotLog, which the MCP server provides by
-    # importing DotBotLog at startup. Outside the server we have to load it ourselves
-    # before dot-sourcing the tool script.
+    # Load DotBotLog (normally provided by the MCP server) before dot-sourcing the tool.
     $dotBotLogModule = Join-Path $botDir "systems\runtime\modules\DotBotLog.psm1"
     if (Test-Path $dotBotLogModule) {
         Import-Module $dotBotLogModule -Force -DisableNameChecking | Out-Null
@@ -650,8 +648,7 @@ try {
         }
     }
 
-    # task-get-next's script.ps1 is not a module; we dot-source it so the test
-    # can call Invoke-TaskGetNext directly against the test project's .bot.
+    # Dot-source the tool script (not a module) so we can call Invoke-TaskGetNext directly.
     $taskGetNextScript = Join-Path $botDir "systems\mcp\tools\task-get-next\script.ps1"
     Assert-PathExists -Name "task-get-next script exists in test project" -Path $taskGetNextScript
     . $taskGetNextScript
@@ -663,7 +660,7 @@ try {
         -Condition ($null -ne (Get-Command Test-ManifestCondition -ErrorAction SilentlyContinue)) `
         -Message "Expected Test-ManifestCondition to be imported from workflow-manifest.ps1"
 
-    # ── Scenario A: condition references a nonexistent file → task is skipped ──
+    # ── Scenario A: unmet condition → task is auto-skipped ──
     $missingCondPath = Join-Path $todoDir "cond-missing.json"
     [ordered]@{
         id = "cond-missing"
@@ -710,7 +707,7 @@ try {
         -Condition $missingTodoGone `
         -Message "Expected todo file to be gone after skip"
 
-    # ── Scenario B: condition references an existing file → task is returned ──
+    # ── Scenario B: condition met → task returned ──
     $productDir = Join-Path $botDir "workspace\product"
     if (-not (Test-Path $productDir)) {
         New-Item -ItemType Directory -Path $productDir -Force | Out-Null
@@ -751,13 +748,10 @@ try {
     }
     Assert-PathExists -Name "Task with satisfied condition stays in todo/" -Path $metCondPath
 
-    # Clean slate before scenarios C and D so leftover todo/skipped files
-    # don't interfere with selection.
+    # Reset state for scenarios C and D.
     Get-ChildItem -Path $todoDir -Filter "*.json" -ErrorAction SilentlyContinue | Remove-Item -Force
     Get-ChildItem -Path $skippedDir -Filter "*.json" -ErrorAction SilentlyContinue | Remove-Item -Force
 
-    # Scenario C sets up its own product-file state explicitly rather than inheriting
-    # from scenario B, so the block stays valid if B is ever reordered or removed.
     if (-not (Test-Path $productDir)) {
         New-Item -ItemType Directory -Path $productDir -Force | Out-Null
     }
@@ -766,8 +760,7 @@ try {
         Remove-Item (Join-Path $productDir "nope.md") -Force
     }
 
-    # ── Scenario C: array-form condition (AND semantics) ──
-    # mission.md must exist AND nope.md must NOT exist → both rules pass, task is returned.
+    # ── Scenario C: array condition (AND of rules) ──
     $arrayCondPath = Join-Path $todoDir "cond-array.json"
     [ordered]@{
         id = "cond-array"
@@ -800,7 +793,7 @@ try {
         -Message "Expected cond-array task to be returned. Got: $($resultC1.task.id)"
     Assert-PathExists -Name "Array-condition task stays in todo/ when all rules pass" -Path $arrayCondPath
 
-    # Now break one rule by creating the file the negated rule says must not exist.
+    # Break the negated rule.
     Set-Content -Path (Join-Path $productDir "nope.md") -Value "boom" -Encoding UTF8
     Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
     Update-TaskIndex
@@ -816,14 +809,10 @@ try {
         -Expected "condition-not-met" `
         -Actual $arraySkipped.skip_reason
 
-    # Clean up the offending file before scenario D.
     Remove-Item (Join-Path $productDir "nope.md") -Force
 
-    # ── Scenario D: prefer_analysed=true → analysed task with unmet condition ──
-    # This is the path the issue cares about most: a task that has already passed
-    # the analysis phase (lives in analysed/) gets its condition re-evaluated at
-    # execution selection time, and is moved analysed → skipped via Move-TaskState
-    # -FromStates @('analysed').
+    # ── Scenario D: analysed task with unmet condition (prefer_analysed=true) ──
+    # The core issue path: re-evaluate condition at execution selection and move analysed → skipped.
     if (-not (Test-Path $analysedDir)) {
         New-Item -ItemType Directory -Path $analysedDir -Force | Out-Null
     }
@@ -874,9 +863,7 @@ try {
     Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
     Update-TaskIndex
 
-    # Default prefer_analysed=true. The runner picks the highest-priority analysed
-    # task first (cond-analysed-skip), discovers its condition is unmet, moves it
-    # to skipped, then re-picks and returns cond-analysed-keep.
+    # Default prefer_analysed=true: skip cond-analysed-skip, return cond-analysed-keep.
     $resultD = Invoke-TaskGetNext -Arguments @{}
     Assert-True -Name "Analysed task with unmet condition is skipped, next analysed task is returned" `
         -Condition ($null -ne $resultD.task -and $resultD.task.id -eq 'cond-analysed-keep') `

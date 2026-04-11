@@ -19,13 +19,14 @@ function Move-TaskToMergeConflictNeedsInput {
         [Parameter(Mandatory)] [string] $TaskId,
         [Parameter(Mandatory)] [string] $TasksBaseDir,
         [Parameter(Mandatory)] [object] $MergeResult,
-        [Parameter(Mandatory)] [string] $WorktreePath
+        [Parameter(Mandatory)] [string] $WorktreePath,
+        [string] $BotRoot = $global:DotbotProjectRoot
     )
 
     $doneDir = Join-Path $TasksBaseDir "done"
     $needsInputDir = Join-Path $TasksBaseDir "needs-input"
 
-    $taskFile = Get-ChildItem -Path $doneDir -Filter "*.json" -File -ErrorAction SilentlyContinue | Where-Object {
+    $taskFile = Get-ChildItem -LiteralPath $doneDir -Filter "*.json" -File -ErrorAction SilentlyContinue | Where-Object {
         try {
             $c = Get-Content $_.FullName -Raw | ConvertFrom-Json
             $c.id -eq $TaskId
@@ -79,7 +80,7 @@ function Move-TaskToMergeConflictNeedsInput {
     # $env:CLAUDE_SESSION_ID is nulled by both runtime workers before the merge,
     # so we cannot rely on it. Best-effort — never block escalation.
     try {
-        $sessionModule = Join-Path $global:DotbotProjectRoot '.bot' | Join-Path -ChildPath 'systems' | Join-Path -ChildPath 'mcp' | Join-Path -ChildPath 'modules' | Join-Path -ChildPath 'SessionTracking.psm1'
+        $sessionModule = Join-Path $BotRoot '.bot' | Join-Path -ChildPath 'systems' | Join-Path -ChildPath 'mcp' | Join-Path -ChildPath 'modules' | Join-Path -ChildPath 'SessionTracking.psm1'
         if ((Test-Path $sessionModule) -and $taskContent.PSObject.Properties['execution_sessions']) {
             $openSession = @($taskContent.execution_sessions) | Where-Object {
                 $_ -and $_.id -and (-not $_.ended_at)
@@ -101,14 +102,20 @@ function Move-TaskToMergeConflictNeedsInput {
         New-Item -ItemType Directory -Force -Path $needsInputDir | Out-Null
     }
     $newPath = Join-Path $needsInputDir $taskFile.Name
-    $taskContent | ConvertTo-Json -Depth 20 | Set-Content -Path $newPath -Encoding UTF8
-    Remove-Item -Path $taskFile.FullName -Force -ErrorAction SilentlyContinue
+    $taskContent | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $newPath -Encoding UTF8
+    try {
+        Remove-Item -LiteralPath $taskFile.FullName -Force -ErrorAction Stop
+    } catch {
+        # Rollback: remove the newly written file to avoid split-brain (task in both done/ and needs-input/)
+        Remove-Item -LiteralPath $newPath -Force -ErrorAction SilentlyContinue
+        throw
+    }
 
     $notified = $false
     $silent = $true
     $reason = "Notifications disabled"
     try {
-        $notifModule = Join-Path $global:DotbotProjectRoot '.bot' | Join-Path -ChildPath 'systems' | Join-Path -ChildPath 'mcp' | Join-Path -ChildPath 'modules' | Join-Path -ChildPath 'NotificationClient.psm1'
+        $notifModule = Join-Path $BotRoot '.bot' | Join-Path -ChildPath 'systems' | Join-Path -ChildPath 'mcp' | Join-Path -ChildPath 'modules' | Join-Path -ChildPath 'NotificationClient.psm1'
         if (Test-Path $notifModule) {
             Import-Module $notifModule -Force
             $settings = Get-NotificationSettings
@@ -123,7 +130,7 @@ function Move-TaskToMergeConflictNeedsInput {
                         project_id  = $sendResult.project_id
                         sent_at     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
                     } -Force
-                    $taskContent | ConvertTo-Json -Depth 20 | Set-Content -Path $newPath -Encoding UTF8
+                    $taskContent | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $newPath -Encoding UTF8
                     $notified = $true
                     $reason = "Notification dispatched"
                 } else {
@@ -161,7 +168,8 @@ function Invoke-MergeConflictEscalation {
         [Parameter(Mandatory)] [string] $TasksBaseDir,
         [Parameter(Mandatory)] [object] $MergeResult,
         [Parameter(Mandatory)] [string] $WorktreePath,
-        [string] $ProcId
+        [string] $ProcId,
+        [string] $BotRoot = $global:DotbotProjectRoot
     )
 
     $emitActivity = {
@@ -177,7 +185,8 @@ function Invoke-MergeConflictEscalation {
             -TaskId $Task.id `
             -TasksBaseDir $TasksBaseDir `
             -MergeResult $MergeResult `
-            -WorktreePath $WorktreePath
+            -WorktreePath $WorktreePath `
+            -BotRoot $BotRoot
     } catch {
         $msg = "Merge-conflict escalation helper failed: $($_.Exception.Message)"
         if (Get-Command Write-Status -ErrorAction SilentlyContinue) {

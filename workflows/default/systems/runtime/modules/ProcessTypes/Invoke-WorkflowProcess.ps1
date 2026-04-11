@@ -919,7 +919,7 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
                     $escalationModule = Join-Path (Split-Path $PSScriptRoot -Parent) 'MergeConflictEscalation.psm1'
                     if (Test-Path $escalationModule) {
                         Import-Module $escalationModule -Force
-                        Invoke-MergeConflictEscalation -Task $task -TasksBaseDir $tasksBaseDir -MergeResult $mergeResult -WorktreePath $worktreePath -ProcId $procId | Out-Null
+                        Invoke-MergeConflictEscalation -Task $task -TasksBaseDir $tasksBaseDir -MergeResult $mergeResult -WorktreePath $worktreePath -ProcId $procId -BotRoot $botRoot | Out-Null
                     } else {
                         Write-Status "Merge-conflict escalation helper not found at $escalationModule" -Type Error
                         Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Escalation helper missing for $($task.name); task left in done/"

@@ -482,7 +482,7 @@ try {
     if (Test-Path $noPostFile) {
         $noPostJson = Get-Content $noPostFile -Raw | ConvertFrom-Json
         Assert-True -Name "post_script absent when not declared" `
-            -Condition ($null -eq $noPostJson.post_script)
+            -Condition ($null -eq $noPostJson.PSObject.Properties['post_script'])
     }
 
 } finally {

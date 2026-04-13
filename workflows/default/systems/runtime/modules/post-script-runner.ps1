@@ -27,6 +27,7 @@ function Invoke-PostScript {
         [Parameter(Mandatory)][string]$RawPostScript
     )
 
+    # NOTE: post_script is trusted manifest input (developer-authored, checked in).
     # Normalise backslashes to forward slashes so Join-Path produces a valid
     # path on both Windows and Unix (Windows accepts either separator).
     $normalized = $RawPostScript -replace '\\', '/'
@@ -51,16 +52,6 @@ function Invoke-PostScript {
     }
 }
 
-<#
-.SYNOPSIS
-Task-runner wrapper that invokes a task's post_script (if any) and reports failure.
-
-.DESCRIPTION
-Used by both task-runner code paths in Invoke-WorkflowProcess.ps1 to avoid
-duplicating the guard + try/catch + logging block. Returns $null on success or
-when the task has no post_script; returns a string error message on failure,
-leaving it to the caller to flip any success flag.
-#>
 <#
 .SYNOPSIS
 Escalate a post_script failure by moving a task from done/ → needs-input/.
@@ -139,6 +130,16 @@ function Invoke-PostScriptFailureEscalation {
     return $true
 }
 
+<#
+.SYNOPSIS
+Task-runner wrapper that invokes a task's post_script (if any) and reports failure.
+
+.DESCRIPTION
+Used by both task-runner code paths in Invoke-WorkflowProcess.ps1 to avoid
+duplicating the guard + try/catch + logging block. Returns $null on success or
+when the task has no post_script; returns a string error message on failure,
+leaving it to the caller to flip any success flag.
+#>
 function Invoke-TaskPostScriptIfPresent {
     [CmdletBinding()]
     param(

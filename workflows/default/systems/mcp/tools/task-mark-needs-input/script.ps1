@@ -29,6 +29,7 @@ function Invoke-TaskMarkNeedsInput {
 
     # Build updates
     $updates = @{}
+    $newPendingQuestions = @()
 
     if ($questionsArg) {
         # Batch questions (preferred path) — store as pending_questions array
@@ -56,6 +57,7 @@ function Invoke-TaskMarkNeedsInput {
             }
         }
         $updates['pending_questions'] = $existingPending + $newPending
+        $newPendingQuestions = $newPending
         $updates['pending_question'] = $null
         $updates['split_proposal'] = $null
         $updates['questions_resolved'] = $questionsResolved
@@ -130,6 +132,30 @@ function Invoke-TaskMarkNeedsInput {
                         project_id  = $sendResult.project_id
                         sent_at     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
                     } -Force
+                    $taskContent | ConvertTo-Json -Depth 20 | Set-Content -Path $result.file_path -Encoding UTF8
+                }
+            } elseif ($settings.enabled -and $newPendingQuestions.Count -gt 0) {
+                $sentAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+                $notificationsMap = @{}
+                if ($taskContent.PSObject.Properties['notifications']) {
+                    foreach ($prop in $taskContent.notifications.PSObject.Properties) {
+                        $notificationsMap[$prop.Name] = $prop.Value
+                    }
+                }
+                foreach ($pq in $newPendingQuestions) {
+                    $sendResult = Send-TaskNotification -TaskContent $taskContent -PendingQuestion $pq
+                    if ($sendResult.success) {
+                        $notificationsMap[$pq.id] = @{
+                            question_id = $sendResult.question_id
+                            instance_id = $sendResult.instance_id
+                            channel     = $sendResult.channel
+                            project_id  = $sendResult.project_id
+                            sent_at     = $sentAt
+                        }
+                    }
+                }
+                if ($notificationsMap.Count -gt 0) {
+                    $taskContent | Add-Member -NotePropertyName 'notifications' -NotePropertyValue $notificationsMap -Force
                     $taskContent | ConvertTo-Json -Depth 20 | Set-Content -Path $result.file_path -Encoding UTF8
                 }
             }

@@ -1645,6 +1645,10 @@ if (Test-Path $notifModule) {
         Assert-True -Name "Split template has questionId (deterministic GUID)" `
             -Condition ($null -ne $templateCapture.questionId -and $templateCapture.questionId.Length -eq 36) `
             -Message "Expected 36-char GUID questionId, got: $($templateCapture.questionId)"
+
+        Assert-True -Name "Split template disables free-text (Approve/Reject binary)" `
+            -Condition ($templateCapture.responseSettings.allowFreeText -eq $false) `
+            -Message "Expected allowFreeText=false for split proposal, got: $($templateCapture.responseSettings.allowFreeText)"
     }
 } else {
     Write-TestResult -Name "NotificationClient module exists" -Status Fail -Message "Module not found at $notifModule"
@@ -1773,6 +1777,16 @@ if (Test-Path $pollerModule) {
         -Message "Invalid key should not throw"
 
     Assert-PathExists -Name "Invalid key: task stays in needs-input" -Path $invalidFile
+
+    if (Test-Path $invalidFile) {
+        $invalidContent = Get-Content -Path $invalidFile -Raw | ConvertFrom-Json
+        Assert-True -Name "Invalid key: notification metadata cleared (prevents poll loop)" `
+            -Condition ($null -eq $invalidContent.notification) `
+            -Message "Expected notification=null after invalid-key ignore"
+        Assert-True -Name "Invalid key: split_proposal preserved" `
+            -Condition ($null -ne $invalidContent.split_proposal -and $invalidContent.split_proposal.reason -eq 'Reason') `
+            -Message "Expected split_proposal preserved"
+    }
     # Cleanup
     Remove-Item -Path $invalidFile -Force -ErrorAction SilentlyContinue
 } else {

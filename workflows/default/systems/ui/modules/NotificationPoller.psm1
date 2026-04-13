@@ -128,6 +128,13 @@ function Invoke-NotificationPollTick {
                     if ($answerKey) {
                         Invoke-SplitTransitionFromNotification -TaskFile $taskFile -TaskContent $taskContent `
                             -AnswerKey $answerKey -BotRoot $botRoot
+                    } else {
+                        # Unsupported response (e.g. free-text reply). The template
+                        # disables free-text, but if a response without selectedKey
+                        # still reaches us we must consume it — otherwise the same
+                        # response is re-fetched on every poll tick indefinitely.
+                        $taskContent.notification = $null
+                        $taskContent | ConvertTo-Json -Depth 20 | Set-Content -Path $taskFile.FullName -Encoding UTF8
                     }
                 } else {
                     # Question response: resolve answer and transition
@@ -275,6 +282,12 @@ function Invoke-SplitTransitionFromNotification {
     $validKeys = @('approve', 'reject')
     if ($AnswerKey -notin $validKeys) {
         Write-BotLog -Level Warn -Message "Unexpected split proposal answer key '$AnswerKey' for task $($TaskContent.id) — ignoring"
+        # Clear notification metadata so the same invalid response is not
+        # re-fetched and re-logged on every subsequent poll tick.
+        if (Test-Path $TaskFile.FullName) {
+            $TaskContent.notification = $null
+            $TaskContent | ConvertTo-Json -Depth 20 | Set-Content -Path $TaskFile.FullName -Encoding UTF8
+        }
         return
     }
 

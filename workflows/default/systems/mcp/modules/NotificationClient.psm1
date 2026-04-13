@@ -289,8 +289,8 @@ function Send-TaskNotification {
     Optional notification settings. If not provided, reads from config.
 
     .OUTPUTS
-    Hashtable: @{ success; question_id; instance_id; channel; project_id }
-    Returns @{ success = $false } on any failure.
+    Hashtable. On success: @{ success = $true; question_id; instance_id; channel; project_id }.
+    On failure: @{ success = $false; reason = "..." } (reason is supplied by Send-ServerNotification).
     #>
     param(
         [Parameter(Mandatory)]
@@ -341,8 +341,8 @@ function Send-SplitProposalNotification {
     Optional notification settings. If not provided, reads from config.
 
     .OUTPUTS
-    Hashtable: @{ success; question_id; instance_id; channel; project_id }
-    Returns @{ success = $false } on any failure.
+    Hashtable. On success: @{ success = $true; question_id; instance_id; channel; project_id }.
+    On failure: @{ success = $false; reason = "..." }.
     #>
     param(
         [Parameter(Mandatory)]
@@ -397,7 +397,10 @@ function Send-SplitProposalNotification {
                 isRecommended = $false
             }
         )
-        responseSettings = @{ allowFreeText = $true }
+        # Split proposal is an explicit Approve/Reject binary choice — free-text
+        # replies have no mapping in the poller and would leave the task stuck
+        # in needs-input with the poller repeatedly re-fetching the same response.
+        responseSettings = @{ allowFreeText = $false }
     }
 
     return Send-ServerNotification -CompositeKey $compositeKey -Template $template -Settings $Settings

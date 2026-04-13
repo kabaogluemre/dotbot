@@ -50,8 +50,19 @@ function Invoke-TaskGetNext {
 
     # Re-evaluate `condition` per candidate (issue #226). Loop so we can skip
     # condition-unmet tasks and pick the next eligible one. Priority: analysed → todo.
-    $maxIterations = 50
-    for ($iter = 0; $iter -lt $maxIterations; $iter++) {
+    # Bound = current candidate pool size (+ small buffer) so we can't return
+    # "no task" while eligible candidates remain behind skipped ones.
+    $initialIndex = Get-TaskIndex
+    $candidatePoolSize = $initialIndex.Todo.Count + $initialIndex.Analysed.Count
+    $maxIterations = [Math]::Max(50, $candidatePoolSize + 10)
+
+    # Track IDs we've already considered in this invocation. Acts as a safety net
+    # against re-picking a task whose Move-TaskState failed (so the index still
+    # lists it as todo/analysed on subsequent Update-TaskIndex calls).
+    $seenIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    $iter = 0
+    for (; $iter -lt $maxIterations; $iter++) {
         $candidate = $null
         $candidateStatus = 'todo'
 
@@ -61,7 +72,7 @@ function Invoke-TaskGetNext {
             if ($analysedResult.BlockedCount -gt $blockedCount) {
                 $blockedCount = $analysedResult.BlockedCount
             }
-            if ($analysedResult.Task) {
+            if ($analysedResult.Task -and -not $seenIds.Contains($analysedResult.Task.id)) {
                 $candidate = $analysedResult.Task
                 $candidateStatus = 'analysed'
                 Write-BotLog -Level Debug -Message "[task-get-next] Found analysed task: $($candidate.id) ($($analysedResult.BlockedCount) blocked by dependencies)"
@@ -73,13 +84,15 @@ function Invoke-TaskGetNext {
         # Fallback to todo (or todo-only when prefer_analysed=false, used by analysis phase)
         if (-not $candidate) {
             $todoCandidate = Get-NextTask -WorkflowFilter $workflowFilter
-            if ($todoCandidate) {
+            if ($todoCandidate -and -not $seenIds.Contains($todoCandidate.id)) {
                 $candidate = $todoCandidate
                 $candidateStatus = 'todo'
             }
         }
 
         if (-not $candidate) { break }
+
+        [void]$seenIds.Add($candidate.id)
 
         # If Test-ManifestCondition is missing here we deliberately let PS raise (see load-time check).
         if ($candidate.condition) {
@@ -95,15 +108,15 @@ function Invoke-TaskGetNext {
                             skip_reason = 'condition-not-met'
                             skip_detail = "Condition not met at runtime: $conditionText"
                         } | Out-Null
+                    $conditionSkipCount++
+                    # TODO: incrementalise — full rescan per skip is O(N·skips).
+                    Update-TaskIndex
                 } catch {
-                    Write-BotLog -Level Warn -Message "[task-get-next] Failed to move task $($candidate.id) to skipped" -Exception $_
-                    # Surface in status message and break to avoid re-picking the same task.
+                    # Surface the failure but keep looking — one bad task shouldn't stall
+                    # the whole pipeline. $seenIds prevents re-picking this candidate.
+                    Write-BotLog -Level Warn -Message "[task-get-next] Failed to move task $($candidate.id) to skipped; continuing with other candidates" -Exception $_
                     $moveFailures += "$($candidate.id) ($($candidate.name))"
-                    break
                 }
-                $conditionSkipCount++
-                # TODO: incrementalise — full rescan per skip is O(N·skips).
-                Update-TaskIndex
                 continue
             }
         }

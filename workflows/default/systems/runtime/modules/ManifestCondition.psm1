@@ -26,7 +26,10 @@ function Test-ManifestCondition {
              elseif ($Condition -is [string]) { @($Condition) }
              else { return $true }
 
-    $resolvedRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
+    $resolvedRoot = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $rootWithSep = $resolvedRoot + [System.IO.Path]::DirectorySeparatorChar
+    # Windows/macOS are case-insensitive on paths; Linux is case-sensitive.
+    $pathComparison = if ($IsLinux) { [System.StringComparison]::Ordinal } else { [System.StringComparison]::OrdinalIgnoreCase }
 
     foreach ($rule in $rules) {
         $rule = "$rule".Trim()
@@ -43,8 +46,12 @@ function Test-ManifestCondition {
         $fullPath = Join-Path $ProjectRoot $rule
 
         # Path traversal guard: resolved path must stay within project root.
+        # Use boundary-safe comparison (root + separator) with OS-appropriate casing
+        # so sibling paths like "C:\projX" can't bypass a "C:\proj" root.
         $resolvedFull = [System.IO.Path]::GetFullPath($fullPath)
-        if (-not $resolvedFull.StartsWith($resolvedRoot)) {
+        $insideRoot = $resolvedFull.Equals($resolvedRoot, $pathComparison) -or `
+                      $resolvedFull.StartsWith($rootWithSep, $pathComparison)
+        if (-not $insideRoot) {
             if (Get-Command Write-BotLog -ErrorAction SilentlyContinue) {
                 Write-BotLog -Level Warn -Message "[ManifestCondition] Path traversal blocked: '$rule' resolves outside project root."
             }

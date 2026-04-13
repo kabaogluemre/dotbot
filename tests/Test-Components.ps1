@@ -1552,6 +1552,104 @@ if (Test-Path $notifModule) {
     Assert-True -Name "Get-TaskNotificationResponse returns null when disabled" `
         -Condition ($null -eq $pollResult) `
         -Message "Expected null"
+
+    # ── Send-SplitProposalNotification tests ─────────────────────────
+    $mockSplitTask = [PSCustomObject]@{ id = "split-test-1"; name = "Refactor auth" }
+    $mockSplitProposal = [PSCustomObject]@{
+        reason = "Task is too large"
+        proposed_at = "2026-01-15T10:00:00Z"
+        sub_tasks = @(
+            [PSCustomObject]@{ name = "Extract middleware"; effort = "S"; description = "Pull out auth middleware" },
+            [PSCustomObject]@{ name = "Add token rotation"; effort = "M"; description = "Implement refresh tokens" }
+        )
+    }
+
+    $splitResult = Send-SplitProposalNotification -TaskContent $mockSplitTask -SplitProposal $mockSplitProposal -Settings $settings
+    Assert-True -Name "Send-SplitProposalNotification returns not-configured when disabled" `
+        -Condition ($splitResult.success -eq $false) `
+        -Message "Expected success=false, got $($splitResult.success)"
+
+    # Test empty sub_tasks guard
+    $emptySplitProposal = [PSCustomObject]@{
+        reason = "Should fail"
+        proposed_at = "2026-01-15T10:00:00Z"
+        sub_tasks = @()
+    }
+    $emptyResult = Send-SplitProposalNotification -TaskContent $mockSplitTask -SplitProposal $emptySplitProposal -Settings $settings
+    Assert-True -Name "Send-SplitProposalNotification rejects empty sub_tasks" `
+        -Condition ($emptyResult.success -eq $false -and $emptyResult.reason -match "no sub-tasks") `
+        -Message "Expected failure with 'no sub-tasks' reason, got: $($emptyResult.reason)"
+
+    # Test missing proposed_at guard
+    $noPropAtProposal = [PSCustomObject]@{
+        reason = "Should fail"
+        sub_tasks = @(
+            [PSCustomObject]@{ name = "Some task"; effort = "S" }
+        )
+    }
+    $noPropAtResult = Send-SplitProposalNotification -TaskContent $mockSplitTask -SplitProposal $noPropAtProposal -Settings $settings
+    Assert-True -Name "Send-SplitProposalNotification rejects missing proposed_at" `
+        -Condition ($noPropAtResult.success -eq $false -and $noPropAtResult.reason -match "proposed_at") `
+        -Message "Expected failure with 'proposed_at' reason, got: $($noPropAtResult.reason)"
+
+    # Test template structure with enabled settings (mock REST to verify shape)
+    $enabledSettings = [PSCustomObject]@{
+        enabled = $true; server_url = "http://localhost:9999"; api_key = "test-key"
+        channel = "teams"; recipients = @("user@example.com")
+        project_name = "test-proj"; project_description = "desc"; instance_id = ""
+    }
+    $templateCapture = $null
+    function global:Invoke-RestMethod {
+        param([string]$Method = 'Get', [string]$Uri, [string]$Body, $Headers, $ContentType, $TimeoutSec)
+        if ($Uri -match '/api/templates$') {
+            $global:templateCapture = $Body | ConvertFrom-Json
+            return @{}
+        }
+        if ($Uri -match '/api/instances$') {
+            return @{}
+        }
+        throw "Unexpected URI: $Uri"
+    }
+    $splitTemplateResult = try {
+        Send-SplitProposalNotification -TaskContent $mockSplitTask -SplitProposal $mockSplitProposal -Settings $enabledSettings
+    } finally {
+        Remove-Item -Path 'function:global:Invoke-RestMethod' -ErrorAction SilentlyContinue
+    }
+    $templateCapture = $global:templateCapture
+    Assert-True -Name "Send-SplitProposalNotification returns success with mock server" `
+        -Condition ($splitTemplateResult.success -eq $true) `
+        -Message "Expected success=true, got: $($splitTemplateResult | ConvertTo-Json -Depth 5)"
+
+    if ($templateCapture) {
+        Assert-True -Name "Split template title contains task name" `
+            -Condition ($templateCapture.title -match "Refactor auth") `
+            -Message "Expected title to contain task name, got: $($templateCapture.title)"
+
+        Assert-True -Name "Split template has 2 options (Approve/Reject)" `
+            -Condition ($templateCapture.options.Count -eq 2) `
+            -Message "Expected 2 options, got $($templateCapture.options.Count)"
+
+        $optionKeys = @($templateCapture.options | ForEach-Object { $_.key })
+        Assert-True -Name "Split template options are 'approve' and 'reject'" `
+            -Condition ($optionKeys -contains 'approve' -and $optionKeys -contains 'reject') `
+            -Message "Expected approve/reject keys, got: $($optionKeys -join ', ')"
+
+        Assert-True -Name "Split template context contains reason" `
+            -Condition ($templateCapture.context -match "too large") `
+            -Message "Expected context to contain reason"
+
+        Assert-True -Name "Split template context contains sub-task names" `
+            -Condition ($templateCapture.context -match "Extract middleware" -and $templateCapture.context -match "Add token rotation") `
+            -Message "Expected context to list sub-tasks"
+
+        Assert-True -Name "Split template has questionId (deterministic GUID)" `
+            -Condition ($null -ne $templateCapture.questionId -and $templateCapture.questionId.Length -eq 36) `
+            -Message "Expected 36-char GUID questionId, got: $($templateCapture.questionId)"
+
+        Assert-True -Name "Split template disables free-text (Approve/Reject binary)" `
+            -Condition ($templateCapture.responseSettings.allowFreeText -eq $false) `
+            -Message "Expected allowFreeText=false for split proposal, got: $($templateCapture.responseSettings.allowFreeText)"
+    }
 } else {
     Write-TestResult -Name "NotificationClient module exists" -Status Fail -Message "Module not found at $notifModule"
 }
@@ -1588,6 +1686,109 @@ if (Test-Path $pollerModule) {
     Assert-True -Name "Invoke-NotificationPollTick no-op when no tasks" `
         -Condition (-not $pollTickError) `
         -Message "Should not throw with empty needs-input"
+
+    # ── Invoke-SplitTransitionFromNotification tests ─────────────────
+    $needsInputDir = Join-Path $botDir "workspace" "tasks" "needs-input"
+    $analysingDir  = Join-Path $botDir "workspace" "tasks" "analysing"
+    if (-not (Test-Path $needsInputDir)) {
+        New-Item -ItemType Directory -Force -Path $needsInputDir | Out-Null
+    }
+
+    # --- Reject path test ---
+    $rejectTask = [PSCustomObject]@{
+        id = "split-reject-test"
+        name = "Task to reject"
+        status = "needs-input"
+        split_proposal = [PSCustomObject]@{
+            reason = "Too big"
+            sub_tasks = @([PSCustomObject]@{ name = "Sub A" })
+            proposed_at = "2026-01-15T10:00:00Z"
+        }
+        notification = [PSCustomObject]@{
+            question_id = "q-reject"; instance_id = "i-reject"; channel = "teams"; project_id = "proj1"
+        }
+        updated_at = "2026-01-15T10:00:00Z"
+    }
+    $rejectFile = Join-Path $needsInputDir "split-reject-test.json"
+    $rejectTask | ConvertTo-Json -Depth 20 | Set-Content -Path $rejectFile -Encoding UTF8
+    $rejectFileInfo = Get-Item $rejectFile
+
+    $rejectError = $false
+    try {
+        Invoke-SplitTransitionFromNotification -TaskFile $rejectFileInfo -TaskContent $rejectTask `
+            -AnswerKey 'reject' -BotRoot $botDir
+    } catch {
+        $rejectError = $true
+    }
+    Assert-True -Name "Invoke-SplitTransitionFromNotification reject does not throw" `
+        -Condition (-not $rejectError) `
+        -Message "Reject path threw an error"
+
+    Assert-PathNotExists -Name "Reject: task removed from needs-input" -Path $rejectFile
+
+    $rejectedFile = Join-Path $analysingDir "split-reject-test.json"
+    Assert-PathExists -Name "Reject: task moved to analysing" -Path $rejectedFile
+
+    if (Test-Path $rejectedFile) {
+        $rejectedContent = Get-Content -Path $rejectedFile -Raw | ConvertFrom-Json
+        Assert-True -Name "Reject: split_proposal.status is 'rejected'" `
+            -Condition ($rejectedContent.split_proposal.status -eq 'rejected') `
+            -Message "Expected 'rejected', got '$($rejectedContent.split_proposal.status)'"
+        Assert-True -Name "Reject: split_proposal.answered_via is 'notification'" `
+            -Condition ($rejectedContent.split_proposal.answered_via -eq 'notification') `
+            -Message "Expected 'notification', got '$($rejectedContent.split_proposal.answered_via)'"
+        Assert-True -Name "Reject: notification metadata cleared" `
+            -Condition ($null -eq $rejectedContent.notification) `
+            -Message "Expected notification=null"
+        Assert-True -Name "Reject: task status is 'analysing'" `
+            -Condition ($rejectedContent.status -eq 'analysing') `
+            -Message "Expected 'analysing', got '$($rejectedContent.status)'"
+        # Cleanup
+        Remove-Item -Path $rejectedFile -Force -ErrorAction SilentlyContinue
+    }
+
+    # --- Invalid key test (no-op) ---
+    $invalidKeyTask = [PSCustomObject]@{
+        id = "split-invalid-test"
+        name = "Task with bad key"
+        status = "needs-input"
+        split_proposal = [PSCustomObject]@{
+            reason = "Reason"; sub_tasks = @([PSCustomObject]@{ name = "Sub" })
+            proposed_at = "2026-01-15T10:00:00Z"
+        }
+        notification = [PSCustomObject]@{
+            question_id = "q-inv"; instance_id = "i-inv"; channel = "teams"; project_id = "proj1"
+        }
+        updated_at = "2026-01-15T10:00:00Z"
+    }
+    $invalidFile = Join-Path $needsInputDir "split-invalid-test.json"
+    $invalidKeyTask | ConvertTo-Json -Depth 20 | Set-Content -Path $invalidFile -Encoding UTF8
+    $invalidFileInfo = Get-Item $invalidFile
+
+    $invalidError = $false
+    try {
+        Invoke-SplitTransitionFromNotification -TaskFile $invalidFileInfo -TaskContent $invalidKeyTask `
+            -AnswerKey 'maybe' -BotRoot $botDir
+    } catch {
+        $invalidError = $true
+    }
+    Assert-True -Name "Invoke-SplitTransitionFromNotification ignores invalid key" `
+        -Condition (-not $invalidError) `
+        -Message "Invalid key should not throw"
+
+    Assert-PathExists -Name "Invalid key: task stays in needs-input" -Path $invalidFile
+
+    if (Test-Path $invalidFile) {
+        $invalidContent = Get-Content -Path $invalidFile -Raw | ConvertFrom-Json
+        Assert-True -Name "Invalid key: notification metadata cleared (prevents poll loop)" `
+            -Condition ($null -eq $invalidContent.notification) `
+            -Message "Expected notification=null after invalid-key ignore"
+        Assert-True -Name "Invalid key: split_proposal preserved" `
+            -Condition ($null -ne $invalidContent.split_proposal -and $invalidContent.split_proposal.reason -eq 'Reason') `
+            -Message "Expected split_proposal preserved"
+    }
+    # Cleanup
+    Remove-Item -Path $invalidFile -Force -ErrorAction SilentlyContinue
 } else {
     Write-TestResult -Name "NotificationPoller module exists" -Status Fail -Message "Module not found at $pollerModule"
 }

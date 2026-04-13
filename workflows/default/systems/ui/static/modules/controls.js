@@ -27,6 +27,13 @@ let UNFILTERED_MODEL_OPTIONS = null;
 let providerData = null;
 
 /**
+ * In-flight workflow runs keyed by workflow name.
+ * Used by runWorkflow() to guard against rapid double-clicks across all
+ * call sites (control panel row, workflow grid, kickstart workflow list).
+ */
+const runWorkflowInFlight = new Set();
+
+/**
  * Fetch provider data from the API and populate model options
  */
 async function loadProviderData() {
@@ -692,29 +699,30 @@ function renderWorkflowControls(workflows) {
  * @param {HTMLElement} [runBtn] - The Run button element; disabled during the call to guard against rapid double-clicks.
  */
 async function runWorkflow(name, hasForm, runBtn) {
-    // Guard against rapid double-clicks: disable the Run button immediately.
-    // For form workflows, the modal's own submit guard takes over once it opens.
-    // For no-form workflows, we re-enable in the finally block after the fetch.
-    if (runBtn) {
-        if (runBtn.disabled) return;
-        runBtn.disabled = true;
-    }
+    // Guard against rapid double-clicks by tracking in-flight runs by workflow
+    // name. This covers all call sites (control panel row, workflow grid,
+    // kickstart workflow list) regardless of whether the caller passes a
+    // button reference.
+    if (runWorkflowInFlight.has(name)) return;
+    runWorkflowInFlight.add(name);
+    if (runBtn) runBtn.disabled = true;
 
     // If workflow has a form, open the kickstart modal so the user can provide
     // project context and upload files before tasks are created.
     // The modal submission routes to the task-runner engine (not kickstart).
     if (hasForm) {
-        if (typeof openKickstartModal === 'function') {
-            try {
+        try {
+            if (typeof openKickstartModal === 'function') {
                 await openKickstartModal(name, { useTaskRunner: true });
-            } finally {
-                // Re-enable the row button once the modal is open — the modal
-                // has its own in-flight guard from here on.
-                if (runBtn) runBtn.disabled = false;
+            } else {
+                console.warn('Workflow requires a form but kickstart modal is not available');
+                showToast('Kickstart modal is not available', 'warning');
             }
-        } else {
-            console.warn('Workflow requires a form but kickstart modal is not available');
-            showToast('Kickstart modal is not available', 'warning');
+        } finally {
+            // Release the in-flight guard and re-enable the button once the
+            // modal is open. The modal has its own kickstartSubmitting guard
+            // from here on.
+            runWorkflowInFlight.delete(name);
             if (runBtn) runBtn.disabled = false;
         }
         return;
@@ -738,6 +746,7 @@ async function runWorkflow(name, hasForm, runBtn) {
         console.error('Run workflow error:', error);
         showSignalFeedback(`Error: ${error.message}`);
     } finally {
+        runWorkflowInFlight.delete(name);
         if (runBtn) runBtn.disabled = false;
     }
 }

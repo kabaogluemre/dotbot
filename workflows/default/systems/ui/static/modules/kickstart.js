@@ -838,6 +838,12 @@ function resetToFormPhase() {
         submitBtn.classList.remove('loading');
         submitBtn.disabled = false;
     }
+
+    // Clear the in-flight submit guard so returning to the form phase
+    // (via Back button or error path) re-enables resubmission. Without this,
+    // the flag set by submitKickstart() stays true forever and every
+    // subsequent Kickstart click early-returns silently.
+    kickstartSubmitting = false;
 }
 
 /**

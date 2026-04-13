@@ -315,6 +315,7 @@ form:
   show_prompt: true
   show_files: false
   show_interview: true
+  show_auto_workflow: false
 tasks:
   - name: "Bravo Phase 1"
     type: prompt
@@ -381,6 +382,12 @@ tasks:
             Assert-Equal -Name "bravo form.show_files respects bravo manifest" `
                 -Expected $false `
                 -Actual ([bool]$bravoResp.dialog.show_files)
+            Assert-Equal -Name "bravo form.show_auto_workflow respects bravo manifest" `
+                -Expected $false `
+                -Actual ([bool]$bravoResp.dialog.show_auto_workflow)
+            Assert-Equal -Name "alpha form.show_auto_workflow defaults to true" `
+                -Expected $true `
+                -Actual ([bool]$alphaResp.dialog.show_auto_workflow)
             Assert-Equal -Name "bravo phases count matches bravo manifest" `
                 -Expected 2 `
                 -Actual ([int]$bravoResp.phases.Count)

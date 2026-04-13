@@ -344,11 +344,12 @@ function Get-WorkflowFormConfig {
                     if ($null -ne $val) { $activeMode[$key] = $val }
                 }
                 $kickstartDialog = @{
-                    description    = $activeMode['description']
-                    show_prompt    = if ($null -ne $activeMode['show_prompt']) { [bool]$activeMode['show_prompt'] } else { $true }
-                    show_files     = if ($null -ne $activeMode['show_files']) { [bool]$activeMode['show_files'] } else { $true }
-                    show_interview = if ($null -ne $activeMode['show_interview']) { [bool]$activeMode['show_interview'] } else { $true }
-                    default_prompt = $activeMode['default_prompt']
+                    description        = $activeMode['description']
+                    show_prompt        = if ($null -ne $activeMode['show_prompt']) { [bool]$activeMode['show_prompt'] } else { $true }
+                    show_files         = if ($null -ne $activeMode['show_files']) { [bool]$activeMode['show_files'] } else { $true }
+                    show_interview     = if ($null -ne $activeMode['show_interview']) { [bool]$activeMode['show_interview'] } else { $true }
+                    show_auto_workflow = if ($null -ne $activeMode['show_auto_workflow']) { [bool]$activeMode['show_auto_workflow'] } else { $true }
+                    default_prompt     = $activeMode['default_prompt']
                 }
                 foreach ($key in @('interview_label', 'interview_hint', 'prompt_placeholder')) {
                     if ($activeMode[$key]) { $kickstartDialog[$key] = "$($activeMode[$key])" }
@@ -362,13 +363,15 @@ function Get-WorkflowFormConfig {
             $formShowPrompt = if ($form -is [System.Collections.IDictionary]) { $form['show_prompt'] } else { $form.show_prompt }
             $formShowFiles = if ($form -is [System.Collections.IDictionary]) { $form['show_files'] } else { $form.show_files }
             $formShowInterview = if ($form -is [System.Collections.IDictionary]) { $form['show_interview'] } else { $form.show_interview }
+            $formShowAutoWorkflow = if ($form -is [System.Collections.IDictionary]) { $form['show_auto_workflow'] } else { $form.show_auto_workflow }
             $formDefaultPrompt = if ($form -is [System.Collections.IDictionary]) { $form['default_prompt'] } else { $form.default_prompt }
             $kickstartDialog = @{
-                description    = "$formDesc"
-                show_prompt    = if ($null -ne $formShowPrompt) { [bool]$formShowPrompt } else { $true }
-                show_files     = if ($null -ne $formShowFiles) { [bool]$formShowFiles } else { $true }
-                show_interview = if ($null -ne $formShowInterview) { [bool]$formShowInterview } else { $true }
-                default_prompt = "$formDefaultPrompt"
+                description        = "$formDesc"
+                show_prompt        = if ($null -ne $formShowPrompt) { [bool]$formShowPrompt } else { $true }
+                show_files         = if ($null -ne $formShowFiles) { [bool]$formShowFiles } else { $true }
+                show_interview     = if ($null -ne $formShowInterview) { [bool]$formShowInterview } else { $true }
+                show_auto_workflow = if ($null -ne $formShowAutoWorkflow) { [bool]$formShowAutoWorkflow } else { $true }
+                default_prompt     = "$formDefaultPrompt"
             }
             foreach ($key in @('interview_label', 'interview_hint', 'prompt_placeholder')) {
                 $val = if ($form -is [System.Collections.IDictionary]) { $form[$key] } else { $form.$key }

@@ -317,11 +317,18 @@ function applyKickstartDialog(dialog, phases, mode) {
     if (interviewOption) interviewOption.style.display = '';
     if (awOption) awOption.style.display = '';
 
+    // Reset dialog-controlled content before applying new values so a workflow
+    // that omits a field does not inherit the previous workflow's text (#235).
+    if (descEl) descEl.textContent = '';
+    if (labelEl) labelEl.textContent = '';
+    if (hintEl) hintEl.textContent = '';
+    if (promptEl) promptEl.placeholder = '';
+
     if (dialog) {
-        if (descEl && dialog.description) descEl.textContent = dialog.description;
-        if (labelEl && dialog.interview_label) labelEl.textContent = dialog.interview_label;
-        if (hintEl && dialog.interview_hint) hintEl.textContent = dialog.interview_hint;
-        if (promptEl && dialog.prompt_placeholder) promptEl.placeholder = dialog.prompt_placeholder;
+        if (descEl && dialog.description != null) descEl.textContent = dialog.description;
+        if (labelEl && dialog.interview_label != null) labelEl.textContent = dialog.interview_label;
+        if (hintEl && dialog.interview_hint != null) hintEl.textContent = dialog.interview_hint;
+        if (promptEl && dialog.prompt_placeholder != null) promptEl.placeholder = dialog.prompt_placeholder;
 
         if (dialog.show_prompt === false) {
             if (promptGroup) promptGroup.style.display = 'none';
@@ -338,30 +345,54 @@ function applyKickstartDialog(dialog, phases, mode) {
         }
     }
 
-    // Render phase checklist
+    // Render phase checklist. Build nodes via the DOM API (not innerHTML) so
+    // manifest-supplied names/ids cannot inject markup.
     const container = document.getElementById('kickstart-phases-container');
     const wrapper = document.getElementById('kickstart-phase-list');
     if (container && wrapper) {
+        container.replaceChildren();
         if (kickstartPhases.length > 0) {
             wrapper.style.display = 'block';
-            container.innerHTML = kickstartPhases.map(p => {
+            kickstartPhases.forEach(p => {
+                const phaseItem = document.createElement('div');
+                const phaseName = p.name ?? '';
                 if (p.optional) {
-                    return `<div class="phase-item">
-                        <label class="form-checkbox-label">
-                            <input type="checkbox" class="kickstart-phase-toggle" data-phase-id="${p.id}" checked>
-                            <span class="form-checkbox-text">${p.name}</span>
-                        </label>
-                    </div>`;
+                    phaseItem.className = 'phase-item';
+
+                    const label = document.createElement('label');
+                    label.className = 'form-checkbox-label';
+
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.className = 'kickstart-phase-toggle';
+                    checkbox.checked = true;
+                    checkbox.dataset.phaseId = String(p.id ?? '');
+
+                    const text = document.createElement('span');
+                    text.className = 'form-checkbox-text';
+                    text.textContent = phaseName;
+
+                    label.appendChild(checkbox);
+                    label.appendChild(text);
+                    phaseItem.appendChild(label);
                 } else {
-                    return `<div class="phase-item phase-fixed">
-                        <span class="phase-bullet">\u203a</span>
-                        <span class="form-checkbox-text">${p.name}</span>
-                    </div>`;
+                    phaseItem.className = 'phase-item phase-fixed';
+
+                    const bullet = document.createElement('span');
+                    bullet.className = 'phase-bullet';
+                    bullet.textContent = '\u203a';
+
+                    const text = document.createElement('span');
+                    text.className = 'form-checkbox-text';
+                    text.textContent = phaseName;
+
+                    phaseItem.appendChild(bullet);
+                    phaseItem.appendChild(text);
                 }
-            }).join('');
+                container.appendChild(phaseItem);
+            });
         } else {
             wrapper.style.display = 'none';
-            container.innerHTML = '';
         }
     }
 }
@@ -406,11 +437,14 @@ async function openKickstartModal(workflowName, options) {
         if (resp.ok) {
             const data = await resp.json();
             if (kickstartWorkflowName !== requestedFor) return;
-            if (data && data.success) {
-                applyKickstartDialog(data.dialog || null, data.phases || [], data.mode || null);
+            if (data && data.success && data.dialog) {
+                applyKickstartDialog(data.dialog, data.phases || [], data.mode || null);
                 applied = true;
             } else {
-                console.warn(`Workflow form lookup returned no data for "${workflowName}"`, data);
+                // success without a usable dialog (e.g. workflow has no form
+                // block) must fall through to the generic fallback below so we
+                // never leave the previous workflow's config on screen (#235).
+                console.warn(`Workflow form lookup returned no usable dialog for "${workflowName}"`, data);
             }
         } else {
             console.warn(`Workflow form lookup failed for "${workflowName}": HTTP ${resp.status}`);

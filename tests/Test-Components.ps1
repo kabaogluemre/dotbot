@@ -1611,6 +1611,11 @@ if (Test-Path $mergeEscModule) {
     # Point DotbotProjectRoot at the isolated temp workspace that has no `.bot/` —
     # `Test-Path` on NotificationClient.psm1 fails, so the notification branch short-circuits
     # to notified=$false deterministically, regardless of the developer's $testProject config.
+    # NB: we pass `-BotRoot $mceBotRoot` explicitly to mirror how the runtime wires the helper
+    # (Invoke-WorkflowProcess / Invoke-ExecutionProcess pass the `.bot` directory, NOT the
+    # project root). This pins the regression: if the helper ever treats `$BotRoot` as a
+    # project root again and appends `.bot`, these tests fail instead of passing vacuously.
+    $mceBotRoot = Join-Path $mceWorkspace ".bot"
     $savedDotbotRoot = $global:DotbotProjectRoot
     $savedSessionEnv = $env:CLAUDE_SESSION_ID
     $global:DotbotProjectRoot = $mceWorkspace
@@ -1621,7 +1626,8 @@ if (Test-Path $mergeEscModule) {
             -TaskId $fakeTaskId `
             -TasksBaseDir $mceWorkspace `
             -MergeResult $fakeMergeResult `
-            -WorktreePath $fakeWorktreePath
+            -WorktreePath $fakeWorktreePath `
+            -BotRoot $mceBotRoot
 
         Assert-True -Name "Move-TaskToMergeConflictNeedsInput returns success" `
             -Condition ($result.success -eq $true) `
@@ -1702,7 +1708,8 @@ if (Test-Path $mergeEscModule) {
             -TaskId "does-not-exist" `
             -TasksBaseDir $mceWorkspace `
             -MergeResult $fakeMergeResult `
-            -WorktreePath $fakeWorktreePath
+            -WorktreePath $fakeWorktreePath `
+            -BotRoot $mceBotRoot
         Assert-True -Name "Missing task returns success=false" `
             -Condition ($missingResult.success -eq $false) `
             -Message "Expected success=false when task file not found in done/"
@@ -1733,7 +1740,8 @@ if (Test-Path $mergeEscModule) {
             -TaskId $fakeTaskId2 `
             -TasksBaseDir $mceWorkspace `
             -MergeResult $fakeMergeResultHashtable `
-            -WorktreePath $fakeWorktreePath2
+            -WorktreePath $fakeWorktreePath2 `
+            -BotRoot $mceBotRoot
 
         Assert-True -Name "Hashtable MergeResult: escalation returns success" `
             -Condition ($resultHash.success -eq $true) `
@@ -1821,7 +1829,8 @@ Export-ModuleMember -Function 'Close-SessionOnTask'
             -TaskId $fakeTaskId3 `
             -TasksBaseDir $mceWorkspace `
             -MergeResult $fakeMergeResult `
-            -WorktreePath $fakeWorktreePath
+            -WorktreePath $fakeWorktreePath `
+            -BotRoot $mceBotRoot
 
         Assert-True -Name "Notified path: escalation returns success" `
             -Condition ($resultNotif.success -eq $true) `

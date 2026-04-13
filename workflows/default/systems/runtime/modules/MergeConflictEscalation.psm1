@@ -10,6 +10,11 @@ function Move-TaskToMergeConflictNeedsInput {
     Move a task from done/ to needs-input/ with a merge-conflict pending_question
     and dispatch an external notification when configured.
 
+    .PARAMETER BotRoot
+    The `.bot` root directory (matches the convention used by WorktreeManager,
+    Get-NotificationSettings, and the runtime process types). Defaults to
+    `$global:DotbotProjectRoot/.bot`.
+
     .OUTPUTS
     @{ success; new_path; notified; notification_silent; notification_reason }
     notification_silent is $true when the project hasn't opted into notifications
@@ -20,8 +25,15 @@ function Move-TaskToMergeConflictNeedsInput {
         [Parameter(Mandatory)] [string] $TasksBaseDir,
         [Parameter(Mandatory)] [object] $MergeResult,
         [Parameter(Mandatory)] [string] $WorktreePath,
-        [string] $BotRoot = $global:DotbotProjectRoot
+        [string] $BotRoot
     )
+
+    if (-not $BotRoot) {
+        if (-not $global:DotbotProjectRoot) {
+            throw "Move-TaskToMergeConflictNeedsInput: BotRoot not provided and \$global:DotbotProjectRoot is not set"
+        }
+        $BotRoot = Join-Path $global:DotbotProjectRoot '.bot'
+    }
 
     $doneDir = Join-Path $TasksBaseDir "done"
     $needsInputDir = Join-Path $TasksBaseDir "needs-input"
@@ -80,7 +92,7 @@ function Move-TaskToMergeConflictNeedsInput {
     # $env:CLAUDE_SESSION_ID is nulled by both runtime workers before the merge,
     # so we cannot rely on it. Best-effort — never block escalation.
     try {
-        $sessionModule = Join-Path $BotRoot '.bot' | Join-Path -ChildPath 'systems' | Join-Path -ChildPath 'mcp' | Join-Path -ChildPath 'modules' | Join-Path -ChildPath 'SessionTracking.psm1'
+        $sessionModule = Join-Path $BotRoot 'systems' | Join-Path -ChildPath 'mcp' | Join-Path -ChildPath 'modules' | Join-Path -ChildPath 'SessionTracking.psm1'
         if ((Test-Path $sessionModule) -and $taskContent.PSObject.Properties['execution_sessions']) {
             $openSession = @($taskContent.execution_sessions) | Where-Object {
                 $_ -and $_.id -and (-not $_.ended_at)
@@ -114,13 +126,20 @@ function Move-TaskToMergeConflictNeedsInput {
     $notified = $false
     $silent = $true
     $reason = "Notifications disabled"
+    $notifModule = Join-Path $BotRoot 'systems' | Join-Path -ChildPath 'mcp' | Join-Path -ChildPath 'modules' | Join-Path -ChildPath 'NotificationClient.psm1'
     try {
-        $notifModule = Join-Path $BotRoot '.bot' | Join-Path -ChildPath 'systems' | Join-Path -ChildPath 'mcp' | Join-Path -ChildPath 'modules' | Join-Path -ChildPath 'NotificationClient.psm1'
         if (Test-Path $notifModule) {
             Import-Module $notifModule -Force
-            $settings = Get-NotificationSettings
-            if ($settings.enabled) {
-                $silent = $false
+            # Module is present — any failure past this point is a real delivery
+            # problem, NOT a silent opt-out. Flip $silent here so the catch below
+            # surfaces unexpected errors instead of masking them.
+            $silent = $false
+            $settings = Get-NotificationSettings -BotRoot $BotRoot
+            if (-not $settings.enabled) {
+                # Explicit opt-out via settings.
+                $silent = $true
+                $reason = "Notifications disabled"
+            } else {
                 $sendResult = Send-TaskNotification -TaskContent $taskContent -PendingQuestion $taskContent.pending_question
                 if ($sendResult -and $sendResult.success) {
                     $taskContent | Add-Member -NotePropertyName 'notification' -NotePropertyValue @{
@@ -169,8 +188,15 @@ function Invoke-MergeConflictEscalation {
         [Parameter(Mandatory)] [object] $MergeResult,
         [Parameter(Mandatory)] [string] $WorktreePath,
         [string] $ProcId,
-        [string] $BotRoot = $global:DotbotProjectRoot
+        [string] $BotRoot
     )
+
+    if (-not $BotRoot) {
+        if (-not $global:DotbotProjectRoot) {
+            throw "Invoke-MergeConflictEscalation: BotRoot not provided and \$global:DotbotProjectRoot is not set"
+        }
+        $BotRoot = Join-Path $global:DotbotProjectRoot '.bot'
+    }
 
     $emitActivity = {
         param($message)

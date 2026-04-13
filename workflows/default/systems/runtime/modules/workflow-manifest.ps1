@@ -371,6 +371,7 @@ function New-WorkflowTask {
     if ($TaskDef['condition'])                 { $task["condition"] = $TaskDef['condition'] }
     if ($TaskDef['outputs'])                   { $task["outputs"] = @($TaskDef['outputs']) }
     if ($TaskDef['env'])                       { $task["env"] = $TaskDef['env'] }
+    if ($TaskDef['post_script'])               { $task["post_script"] = $TaskDef['post_script'] }
 
     $slug = ($name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLower()
     if ($slug.Length -gt 50) { $slug = $slug.Substring(0, 50) }

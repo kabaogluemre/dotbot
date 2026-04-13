@@ -64,6 +64,8 @@ $entityModel = if (Test-Path (Join-Path $productDir "entity-model.md")) { "Read 
 
 # Task reset
 . (Join-Path $botRoot "systems\runtime\modules\task-reset.ps1")
+# Post-script runner (shared helper)
+. (Join-Path $botRoot "systems\runtime\modules\post-script-runner.ps1")
 $tasksBaseDir = Join-Path $botRoot "workspace\tasks"
 
 # Recover orphaned tasks
@@ -359,6 +361,20 @@ try {
                 $typeError = $_.Exception.Message
                 Write-Status "Task type execution failed: $typeError" -Type Error
                 Write-ProcessActivity -Id $procId -ActivityType "error" -Message "$($task.name): $typeError"
+            }
+
+            # Post-script hook: run after successful task execution, before the
+            # move to done/. There is no task_mark_done call on this path (script/
+            # mcp/task_gen tasks skip verification hooks), so the post-script is
+            # the last thing to run before the task is considered complete. On
+            # failure, $typeSuccess is flipped so the task is marked skipped below.
+            if ($typeSuccess) {
+                $psErr = Invoke-TaskPostScriptIfPresent -Task $task -BotRoot $botRoot `
+                    -ProductDir $productDir -Settings $settings -Model $claudeModelName -ProcessId $procId
+                if ($psErr) {
+                    $typeSuccess = $false
+                    $typeError = $psErr
+                }
             }
 
             if ($typeSuccess) {
@@ -739,6 +755,8 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
         Write-ProcessFile -Id $procId -Data $processData
 
         $taskSuccess = $false
+        $postScriptFailed = $false
+        $postScriptError = $null
         $attemptNumber = 0
 
         if ($worktreePath) { Push-Location $worktreePath }
@@ -856,6 +874,25 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
                 break
             }
         }
+
+        # Post-script hook: run inside the worktree (CWD is still the worktree
+        # here — Pop-Location happens in the finally below) so the script can
+        # operate on the task's artefacts before the squash-merge.
+        #
+        # At this point task_mark_done has already moved the task JSON to done/,
+        # so a failure here is NOT a generic task failure — we must NOT destroy
+        # the worktree or increment consecutive_failures. Instead we set
+        # $postScriptFailed and escalate to needs-input/ below, mirroring the
+        # merge-conflict escalation pattern.
+        if ($taskSuccess) {
+            $psErr = Invoke-TaskPostScriptIfPresent -Task $task -BotRoot $botRoot `
+                -ProductDir $productDir -Settings $settings -Model $claudeModelName -ProcessId $procId
+            if ($psErr) {
+                $taskSuccess = $false
+                $postScriptFailed = $true
+                $postScriptError = $psErr
+            }
+        }
         } finally {
             # Final safety-net cleanup: kill any remaining worktree processes
             if ($worktreePath) {
@@ -963,6 +1000,29 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
             $processData.heartbeat_status = "Completed: $($task.name)"
             Write-ProcessFile -Id $procId -Data $processData
             Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Task completed (analyse+execute): $($task.name)"
+        } elseif ($postScriptFailed) {
+            # post_script failed AFTER task_mark_done moved the task JSON to done/.
+            # Preserve the worktree (so the operator can inspect artefacts and re-run
+            # the post_script manually) and move the task to needs-input/ with a
+            # pending_question. Deliberately skip worktree destruction and the
+            # consecutive_failures bump — this is operator-recoverable, not an agent
+            # failure.
+            Write-Status "post_script failed for $($task.name) — escalating to needs-input" -Type Warn
+            Write-ProcessActivity -Id $procId -ActivityType "error" -Message "post_script failed for $($task.name): $postScriptError — worktree preserved at $worktreePath"
+
+            try {
+                $moved = Invoke-PostScriptFailureEscalation -Task $task -TasksBaseDir $tasksBaseDir `
+                    -PostScriptError $postScriptError -WorktreePath $worktreePath
+                if ($moved) {
+                    Write-Status "Task moved to needs-input for manual post_script resolution" -Type Warn
+                } else {
+                    Write-Status "Could not locate task in done/ during post_script escalation — state may be inconsistent" -Type Error
+                    Write-ProcessActivity -Id $procId -ActivityType "error" -Message "Post-script escalation could not find $($task.name) in done/"
+                }
+            } catch {
+                Write-Status "Post-script escalation failed: $($_.Exception.Message)" -Type Error
+                Write-ProcessActivity -Id $procId -ActivityType "error" -Message "Post-script escalation failed for $($task.name): $($_.Exception.Message)"
+            }
         } else {
             Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Task failed: $($task.name)"
 

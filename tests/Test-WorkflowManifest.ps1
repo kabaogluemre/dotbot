@@ -1113,6 +1113,61 @@ Assert-True -Name "Fix#4: 01b-generate-decisions.md marks interview-summary.md a
 Assert-True -Name "Fix#4: 01b-generate-decisions.md still reads mission/tech-stack/entity-model unconditionally" `
     -Condition (($decisionsPromptSrc -match 'mission\.md') -and ($decisionsPromptSrc -match 'tech-stack\.md') -and ($decisionsPromptSrc -match 'entity-model\.md'))
 
+# ── Batch 2, Fix A: 99-autonomous-task.md must teach agents branch-conditional
+# push semantics so tasks that run on shared branches (main/master) are
+# pushed immediately instead of leaving the agent stuck on the
+# 02-git-pushed.ps1 gate at task_mark_done time.
+$autonomousTaskPrompts = @(
+    (Join-Path $repoRoot "workflows\default\recipes\prompts\99-autonomous-task.md"),
+    (Join-Path $repoRoot "workflows\kickstart-via-jira\recipes\prompts\99-autonomous-task.md")
+)
+foreach ($pf in $autonomousTaskPrompts) {
+    $relName = Split-Path $pf -Leaf
+    $parentDir = Split-Path (Split-Path (Split-Path (Split-Path $pf -Parent) -Parent) -Parent) -Leaf
+    Assert-PathExists -Name "Fix#A: $parentDir/$relName exists" -Path $pf
+    $src = Get-Content $pf -Raw
+    Assert-True -Name "Fix#A: $parentDir/$relName has branch-conditional task/ guard" `
+        -Condition ($src -match 'If\s+`\{\{BRANCH_NAME\}\}`\s+starts\s+with\s+`task/`')
+    Assert-True -Name "Fix#A: $parentDir/$relName instructs push on shared branches" `
+        -Condition ($src -match 'push\s+immediately\s+to\s+`origin/\{\{BRANCH_NAME\}\}`')
+    Assert-True -Name "Fix#A: $parentDir/$relName cites 02-git-pushed.ps1 failure mode" `
+        -Condition ($src -match '02-git-pushed\.ps1')
+    Assert-True -Name "Fix#A: $parentDir/$relName no longer hardcodes 'git worktree on branch' assertion" `
+        -Condition (-not ($src -match 'You are working in a \*\*git worktree\*\* on branch'))
+}
+
+# ── Batch 2, Fix B: 03a-plan-task-groups.md must include task-level rigor
+# (schema, acceptance-criteria quality bar, effort sizing, dependency chain)
+# that 03b-expand-task-group.md inherits during expansion.
+$planTaskGroupsPath = Join-Path $repoRoot "workflows\kickstart-from-scratch\recipes\prompts\03a-plan-task-groups.md"
+Assert-PathExists -Name "Fix#B: 03a-plan-task-groups.md exists" -Path $planTaskGroupsPath
+$planTaskGroupsSrc = Get-Content $planTaskGroupsPath -Raw
+
+Assert-True -Name "Fix#B: 03a has Task Schema Reference section" `
+    -Condition ($planTaskGroupsSrc -match '##\s+Task Schema Reference')
+Assert-True -Name "Fix#B: 03a requires per-task acceptance_criteria field" `
+    -Condition ($planTaskGroupsSrc -match '`acceptance_criteria`.*testable')
+Assert-True -Name "Fix#B: 03a requires human_hours / ai_hours estimates" `
+    -Condition (($planTaskGroupsSrc -match '`human_hours`') -and ($planTaskGroupsSrc -match '`ai_hours`'))
+Assert-True -Name "Fix#B: 03a has Good Task Acceptance Criteria section" `
+    -Condition ($planTaskGroupsSrc -match '##\s+Good Task Acceptance Criteria')
+Assert-True -Name "Fix#B: 03a has Effort Sizing section" `
+    -Condition ($planTaskGroupsSrc -match '##\s+Effort Sizing')
+Assert-True -Name "Fix#B: 03a Effort Sizing has XS through XL rows" `
+    -Condition (($planTaskGroupsSrc -match '`XS`') -and ($planTaskGroupsSrc -match '`XL`'))
+Assert-True -Name "Fix#B: 03a Step 3 dependency chain mentions infra/entities/features" `
+    -Condition ($planTaskGroupsSrc -match '(?s)Infrastructure.*entities.*[Ff]eature.*jobs')
+Assert-True -Name "Fix#B: 03a anti-patterns forbid effort-based buckets" `
+    -Condition ($planTaskGroupsSrc -match '[Ee]ffort-based\s+buckets')
+
+# ── Batch 2, Fix B cross-link: 03b-expand-task-group.md must inherit from 03a.
+$expandTaskGroupPath = Join-Path $repoRoot "workflows\kickstart-from-scratch\recipes\prompts\03b-expand-task-group.md"
+$expandTaskGroupSrc = Get-Content $expandTaskGroupPath -Raw
+Assert-True -Name "Fix#B: 03b cross-links to 03a for schema/criteria/sizing" `
+    -Condition ($expandTaskGroupSrc -match 'Inherits\s+from\s+03a-plan-task-groups\.md')
+Assert-True -Name "Fix#B: 03b tells agent not to relax constraints during expansion" `
+    -Condition ($expandTaskGroupSrc -match 'do\s+not\s+relax\s+them\s+during\s+expansion')
+
 Write-Host ""
 
 # ═══════════════════════════════════════════════════════════════════

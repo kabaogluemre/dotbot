@@ -172,7 +172,7 @@ function Convert-ManifestRequiresToPreflightChecks {
 }
 
 # Test-ManifestCondition lives in its own module for controlled exports.
-Import-Module (Join-Path $PSScriptRoot "ManifestCondition.psm1") -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot "ManifestCondition.psm1") -Force -Global -DisableNameChecking
 
 function Ensure-ManifestTaskIds {
     <#

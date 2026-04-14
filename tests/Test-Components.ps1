@@ -2991,6 +2991,201 @@ if (Test-Path $dotBotLogModule) {
 }
 
 # ═══════════════════════════════════════════════════════════════════
+# FRAMEWORK INTEGRITY — BEHAVIORAL TESTS
+# ═══════════════════════════════════════════════════════════════════
+
+Write-Host "  FRAMEWORK INTEGRITY" -ForegroundColor Cyan
+Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
+
+$repoRoot = Get-RepoRoot
+$manifestModule = Join-Path $dotbotDir "scripts" "Manifest.psm1"
+$frameworkIntegrityModule = Join-Path $dotbotDir "workflows" "default" "systems" "mcp" "modules" "FrameworkIntegrity.psm1"
+
+if ((Test-Path $manifestModule) -and (Test-Path $frameworkIntegrityModule)) {
+    Import-Module $manifestModule -Force
+    Import-Module $frameworkIntegrityModule -Force
+
+    # Build a minimal mock .bot/ in a temp directory with git
+    $fiTestDir = Join-Path ([System.IO.Path]::GetTempPath()) "dotbot-fi-test-$(Get-Random)"
+    New-Item -ItemType Directory -Path $fiTestDir -Force | Out-Null
+    Push-Location $fiTestDir
+    try {
+        & git init --quiet 2>$null
+        & git config user.email "test@test.com" 2>$null
+        & git config user.name "Test" 2>$null
+
+        # Create a .bot/ structure with two protected dirs and a protected file.
+        # Include the sentinel file (dotbot-mcp.ps1) that Test-FrameworkIntegrity
+        # uses to detect pre-first-commit state via git log.
+        $protectedPaths = @('.bot/systems', '.bot/go.ps1')
+        New-Item -ItemType Directory -Path (Join-Path $fiTestDir ".bot/systems/mcp") -Force | Out-Null
+        Set-Content -Path (Join-Path $fiTestDir ".bot/systems/mcp/dotbot-mcp.ps1") -Value "# mcp server" -Encoding UTF8
+        Set-Content -Path (Join-Path $fiTestDir ".bot/go.ps1") -Value "# go" -Encoding UTF8
+
+        # ── New-DotbotManifest: generates valid JSON with correct hashes ──
+
+        $mfPath = New-DotbotManifest -ProjectRoot $fiTestDir -ProtectedPaths $protectedPaths -Generator 'test'
+        Assert-True -Name "New-DotbotManifest returns manifest path" `
+            -Condition ($null -ne $mfPath -and (Test-Path $mfPath)) `
+            -Message "Expected a valid file path, got $mfPath"
+
+        $mfJson = $null
+        try { $mfJson = Get-Content $mfPath -Raw | ConvertFrom-Json } catch {}
+        Assert-True -Name "New-DotbotManifest produces valid JSON" `
+            -Condition ($null -ne $mfJson) `
+            -Message "Manifest file is not valid JSON"
+
+        Assert-True -Name "Manifest has version field" `
+            -Condition ($mfJson.version -eq 1) `
+            -Message "Expected version=1, got $($mfJson.version)"
+        Assert-True -Name "Manifest has generator field" `
+            -Condition ($mfJson.generator -eq 'test') `
+            -Message "Expected generator=test, got $($mfJson.generator)"
+        Assert-True -Name "Manifest has files object" `
+            -Condition ($null -ne $mfJson.files) `
+            -Message "Missing files object"
+        Assert-True -Name "Manifest has user_paths array" `
+            -Condition ($null -ne $mfJson.user_paths) `
+            -Message "Missing user_paths field"
+
+        # Verify SHA256 hash is correct for a known file
+        $goHash = (Get-FileHash -LiteralPath (Join-Path $fiTestDir ".bot/go.ps1") -Algorithm SHA256).Hash
+        $manifestGoHash = $mfJson.files.'.bot/go.ps1'.sha256
+        Assert-True -Name "Manifest SHA256 matches actual file hash" `
+            -Condition ($manifestGoHash -eq $goHash) `
+            -Message "Expected $goHash, got $manifestGoHash"
+
+        # Verify both files are in the manifest
+        $fileKeys = @($mfJson.files.PSObject.Properties.Name)
+        Assert-True -Name "Manifest contains both protected files" `
+            -Condition ($fileKeys.Count -eq 2) `
+            -Message "Expected 2 files, got $($fileKeys.Count): $($fileKeys -join ', ')"
+
+        # ── Test-DotbotManifest: clean state ──
+
+        $cleanResult = Test-DotbotManifest -ProjectRoot $fiTestDir -ProtectedPaths $protectedPaths
+        Assert-True -Name "Test-DotbotManifest clean: success=true" `
+            -Condition ($cleanResult.success -eq $true) `
+            -Message "Expected success, got reason=$($cleanResult.reason)"
+        Assert-True -Name "Test-DotbotManifest clean: reason=clean" `
+            -Condition ($cleanResult.reason -eq 'clean') `
+            -Message "Expected reason=clean, got $($cleanResult.reason)"
+
+        # ── Test-DotbotManifest: tampered file ──
+
+        Set-Content -Path (Join-Path $fiTestDir ".bot/go.ps1") -Value "# TAMPERED" -Encoding UTF8
+        $tamperResult = Test-DotbotManifest -ProjectRoot $fiTestDir -ProtectedPaths $protectedPaths
+        Assert-True -Name "Test-DotbotManifest tampered: success=false" `
+            -Condition ($tamperResult.success -eq $false) `
+            -Message "Expected failure for tampered file"
+        Assert-True -Name "Test-DotbotManifest tampered: reason=tampered" `
+            -Condition ($tamperResult.reason -eq 'tampered') `
+            -Message "Expected reason=tampered, got $($tamperResult.reason)"
+        Assert-True -Name "Test-DotbotManifest tampered: flags correct file" `
+            -Condition ($tamperResult.files -contains '.bot/go.ps1') `
+            -Message "Expected .bot/go.ps1 in files, got $($tamperResult.files -join ', ')"
+        # Restore
+        Set-Content -Path (Join-Path $fiTestDir ".bot/go.ps1") -Value "# go" -Encoding UTF8
+
+        # ── Test-DotbotManifest: added file ──
+
+        Set-Content -Path (Join-Path $fiTestDir ".bot/systems/extra.ps1") -Value "# extra" -Encoding UTF8
+        $addResult = Test-DotbotManifest -ProjectRoot $fiTestDir -ProtectedPaths $protectedPaths
+        Assert-True -Name "Test-DotbotManifest added: success=false" `
+            -Condition ($addResult.success -eq $false) `
+            -Message "Expected failure for added file"
+        Assert-True -Name "Test-DotbotManifest added: flags the new file" `
+            -Condition ($addResult.files -contains '.bot/systems/extra.ps1') `
+            -Message "Expected .bot/systems/extra.ps1 in files, got $($addResult.files -join ', ')"
+        Remove-Item (Join-Path $fiTestDir ".bot/systems/extra.ps1") -Force
+
+        # ── Test-DotbotManifest: deleted file ──
+
+        Rename-Item (Join-Path $fiTestDir ".bot/go.ps1") (Join-Path $fiTestDir ".bot/go.ps1.bak")
+        $delResult = Test-DotbotManifest -ProjectRoot $fiTestDir -ProtectedPaths $protectedPaths
+        Assert-True -Name "Test-DotbotManifest deleted: success=false" `
+            -Condition ($delResult.success -eq $false) `
+            -Message "Expected failure for deleted file"
+        Assert-True -Name "Test-DotbotManifest deleted: flags missing file" `
+            -Condition ($delResult.files -contains '.bot/go.ps1') `
+            -Message "Expected .bot/go.ps1 in files, got $($delResult.files -join ', ')"
+        Rename-Item (Join-Path $fiTestDir ".bot/go.ps1.bak") (Join-Path $fiTestDir ".bot/go.ps1")
+
+        # ── Test-DotbotManifest: missing manifest ──
+
+        $savedManifest = Get-Content $mfPath -Raw
+        Remove-Item $mfPath -Force
+        $missingResult = Test-DotbotManifest -ProjectRoot $fiTestDir -ProtectedPaths $protectedPaths
+        Assert-True -Name "Test-DotbotManifest missing-manifest: reason=missing-manifest" `
+            -Condition ($missingResult.reason -eq 'missing-manifest') `
+            -Message "Expected reason=missing-manifest, got $($missingResult.reason)"
+        # Restore
+        [System.IO.File]::WriteAllText($mfPath, $savedManifest, [System.Text.UTF8Encoding]::new($false))
+
+        # ── Test-FrameworkIntegrity: pre-first-commit (no git history) ──
+
+        $preCommitResult = Test-FrameworkIntegrity
+        Assert-True -Name "Test-FrameworkIntegrity pre-first-commit: success=true" `
+            -Condition ($preCommitResult.success -eq $true) `
+            -Message "Expected success for pre-first-commit, got reason=$($preCommitResult.reason)"
+        Assert-True -Name "Test-FrameworkIntegrity pre-first-commit: reason=pre-first-commit" `
+            -Condition ($preCommitResult.reason -eq 'pre-first-commit') `
+            -Message "Expected reason=pre-first-commit, got $($preCommitResult.reason)"
+
+        # ── Test-FrameworkIntegrity: clean (after commit) ──
+
+        & git add -A 2>$null
+        & git commit -m "init" --quiet 2>$null
+        $cleanInteg = Test-FrameworkIntegrity
+        Assert-True -Name "Test-FrameworkIntegrity clean: success=true" `
+            -Condition ($cleanInteg.success -eq $true) `
+            -Message "Expected success, got reason=$($cleanInteg.reason) message=$($cleanInteg.message)"
+        Assert-True -Name "Test-FrameworkIntegrity clean: reason=clean" `
+            -Condition ($cleanInteg.reason -eq 'clean') `
+            -Message "Expected reason=clean, got $($cleanInteg.reason)"
+
+        # ── Test-FrameworkIntegrity: tampered (uncommitted edit) ──
+
+        Set-Content -Path (Join-Path $fiTestDir ".bot/go.ps1") -Value "# TAMPERED" -Encoding UTF8
+        $tamperedInteg = Test-FrameworkIntegrity
+        Assert-True -Name "Test-FrameworkIntegrity tampered: success=false" `
+            -Condition ($tamperedInteg.success -eq $false) `
+            -Message "Expected failure for tampered file"
+        Assert-True -Name "Test-FrameworkIntegrity tampered: reason=tampered" `
+            -Condition ($tamperedInteg.reason -eq 'tampered') `
+            -Message "Expected reason=tampered, got $($tamperedInteg.reason)"
+        & git checkout -- ".bot/go.ps1" 2>$null
+
+        # ── Invoke-FrameworkIntegrityGate: passes on clean ──
+
+        $gateClean = Invoke-FrameworkIntegrityGate -ProjectRoot $fiTestDir
+        Assert-True -Name "Invoke-FrameworkIntegrityGate clean: returns null" `
+            -Condition ($null -eq $gateClean) `
+            -Message "Expected null for clean state, got $($gateClean | ConvertTo-Json -Compress)"
+
+        # ── Invoke-FrameworkIntegrityGate: blocks on tampered ──
+
+        Set-Content -Path (Join-Path $fiTestDir ".bot/go.ps1") -Value "# TAMPERED" -Encoding UTF8
+        $gateBlocked = Invoke-FrameworkIntegrityGate -ProjectRoot $fiTestDir -TaskId 'test-123'
+        Assert-True -Name "Invoke-FrameworkIntegrityGate tampered: returns hashtable" `
+            -Condition ($null -ne $gateBlocked) `
+            -Message "Expected a blocking hashtable for tampered state"
+        Assert-True -Name "Invoke-FrameworkIntegrityGate tampered: success=false" `
+            -Condition ($gateBlocked.success -eq $false) `
+            -Message "Expected success=false"
+        Assert-True -Name "Invoke-FrameworkIntegrityGate tampered: includes task_id" `
+            -Condition ($gateBlocked.task_id -eq 'test-123') `
+            -Message "Expected task_id=test-123, got $($gateBlocked.task_id)"
+
+    } finally {
+        Pop-Location
+        if (Test-Path $fiTestDir) { Remove-Item $fiTestDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+} else {
+    Write-TestResult -Name "Framework integrity tests" -Status Skip -Message "Manifest.psm1 or FrameworkIntegrity.psm1 not found"
+}
+
+# ═══════════════════════════════════════════════════════════════════
 # CLEANUP
 # ═══════════════════════════════════════════════════════════════════
 

@@ -522,11 +522,11 @@ try {
     }
     $pzResult = New-WorkflowTask -ProjectBotDir $taskBotDir -WorkflowName "default" -TaskDef $priorityZeroDef
     $pzFile = Join-Path $taskBotDir "workspace\tasks\todo" $pzResult.file
-    if (Test-Path $pzFile) {
-        $pzJson = Get-Content $pzFile -Raw | ConvertFrom-Json
-        Assert-Equal -Name "Priority 0 preserved (not replaced by default)" `
-            -Expected 0 -Actual $pzJson.priority
-    }
+    Assert-True -Name "Priority 0 task file created" `
+        -Condition (Test-Path $pzFile)
+    $pzJson = Get-Content $pzFile -Raw | ConvertFrom-Json
+    Assert-Equal -Name "Priority 0 preserved (not replaced by default)" `
+        -Expected 0 -Actual $pzJson.priority
 
 } finally {
     Remove-Item -Path $taskRoot -Recurse -Force -ErrorAction SilentlyContinue

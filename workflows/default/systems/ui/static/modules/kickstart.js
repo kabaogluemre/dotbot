@@ -1304,8 +1304,8 @@ async function resumeWorkflow(workflowName) {
 /**
  * Build side panel data from /api/state — single source of truth.
  * Returns an array of workflow objects, each with tasks (priority-sorted),
- * counts, and resume state. Workflows with a running process come first,
- * then sorted alphabetically.
+ * counts, and resume state. Workflows are sorted alphabetically for
+ * stable display ordering.
  *
  * Returns: [{ workflow_name, tasks, counts, can_resume, status }, ...] or null
  */
@@ -1348,7 +1348,13 @@ function buildWorkflowPanelData(state) {
             }
         }
 
-        allTasks.sort((a, b) => a.priority - b.priority);
+        allTasks.sort((a, b) => {
+            const priorityDiff = a.priority - b.priority;
+            if (priorityDiff !== 0) return priorityDiff;
+            const nameDiff = String(a.name || '').localeCompare(String(b.name || ''));
+            if (nameDiff !== 0) return nameDiff;
+            return String(a.id).localeCompare(String(b.id));
+        });
 
         // Determine resume state
         const pending = (wf.todo || 0) + (wf.analysing || 0) + (wf.needs_input || 0) +

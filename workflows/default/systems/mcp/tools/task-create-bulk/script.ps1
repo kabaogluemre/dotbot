@@ -99,7 +99,7 @@ function Invoke-TaskCreateBulk {
             if ($dependencies -and $dependencies.Count -gt 0) {
                 $invalidDeps = @()
                 foreach ($dep in $dependencies) {
-                    $depLower = $dep.ToLower()
+                    $depLower = $dep.ToLowerInvariant()
                     $found = $false
                     
                     # Check all existing tasks
@@ -107,7 +107,7 @@ function Invoke-TaskCreateBulk {
                     
                     # Also check previously created tasks in this batch
                     $allTasks += $createdTasks | ForEach-Object {
-                        $taskSlug = ($_.name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLower()
+                        $taskSlug = ($_.name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLowerInvariant()
                         [PSCustomObject]@{
                             id = $_.id
                             name = $_.name
@@ -123,7 +123,7 @@ function Invoke-TaskCreateBulk {
                         if ($t.name -eq $dep) { $found = $true; break }
                         
                         # Check slug match
-                        $taskSlug = if ($t.slug) { $t.slug } else { ($t.name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLower() }
+                        $taskSlug = if ($t.slug) { $t.slug } else { ($t.name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLowerInvariant() }
                         if ($taskSlug -eq $depLower) { $found = $true; break }
                         
                         # Fuzzy match
@@ -180,7 +180,7 @@ function Invoke-TaskCreateBulk {
             }
 
             # Create filename from name (sanitized)
-            $fileName = ($task.name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLower()
+            $fileName = ($task.name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLowerInvariant()
             if ($fileName.Length -gt 50) {
                 $fileName = $fileName.Substring(0, 50)
             }

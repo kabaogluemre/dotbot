@@ -103,7 +103,7 @@ function Invoke-TaskCreate {
         
         $invalidDeps = @()
         foreach ($dep in $dependencies) {
-            $depLower = $dep.ToLower()
+            $depLower = $dep.ToLowerInvariant()
             $found = $false
             
             # Check all tasks (todo, in-progress, done)
@@ -117,7 +117,7 @@ function Invoke-TaskCreate {
                 if ($task.name -eq $dep) { $found = $true; break }
                 
                 # Check slug match (generated from name)
-                $taskSlug = ($task.name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLower()
+                $taskSlug = ($task.name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLowerInvariant()
                 if ($taskSlug -eq $depLower) { $found = $true; break }
                 
                 # Fuzzy match
@@ -198,7 +198,7 @@ function Invoke-TaskCreate {
     }
     
     # Create filename from name (sanitized)
-    $fileName = ($name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLower()
+    $fileName = ($name -replace '[^\w\s-]', '' -replace '\s+', '-').ToLowerInvariant()
     if ($fileName.Length -gt 50) {
         $fileName = $fileName.Substring(0, 50)
     }

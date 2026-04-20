@@ -182,8 +182,12 @@ function Reset-AnalysingTasks {
 
     .DESCRIPTION
     Cross-references tasks in analysing/ against live processes in the process registry.
-    A task is considered orphaned if no running/starting process owns it AND its updated_at
-    is older than 5 minutes (safety buffer to avoid racing with freshly launched processes).
+    A task is considered orphaned if no running/starting process owns it. The PID liveness
+    check above is authoritative — if the owning process is confirmed dead, the task is
+    recovered immediately. A small 30-second staleness buffer remains as a race guard for
+    the tiny window between a fresh process claiming a task and writing its process file.
+    (Fix #214: the previous 5-minute buffer left killed-process tasks stuck in analysing/
+    for 5 minutes after restart, blocking resumption.)
 
     .PARAMETER TasksBaseDir
     Base directory containing task subdirectories (todo, analysing, etc.)
@@ -249,7 +253,11 @@ function Reset-AnalysingTasks {
     }
 
     $now = (Get-Date).ToUniversalTime()
-    $stalenessThreshold = $now.AddMinutes(-5)
+    # Small race guard: a fresh process may have claimed the task but not yet written
+    # its process file (milliseconds in practice). 30 seconds is more than enough.
+    # Fix #214: was 5 minutes, which left killed-process tasks stuck in analysing/
+    # for 5 minutes after restart even though the PID check proved the owner was dead.
+    $stalenessThreshold = $now.AddSeconds(-30)
 
     foreach ($taskFile in $analysingTasks) {
         try {
@@ -263,7 +271,7 @@ function Reset-AnalysingTasks {
             # Skip if a live process owns this task
             if ($liveTaskIds.Contains($taskId)) { continue }
 
-            # Safety buffer: skip if updated_at is less than 5 minutes ago
+            # Safety buffer: skip if updated_at is less than 30 seconds ago
             if ($taskContent.updated_at) {
                 # ConvertFrom-Json auto-parses ISO dates to DateTime; avoid double-parsing
                 # which mangles month/day order across cultures

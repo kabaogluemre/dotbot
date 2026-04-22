@@ -417,6 +417,16 @@ try {
                         Write-Status "Mandatory task failed: $($task.name) - stopping workflow" -Type Error
                         Write-ProcessActivity -Id $procId -ActivityType "error" -Message "Mandatory task failed, stopping workflow: $($task.name)"
                         Write-Diag "EXIT: Mandatory task failure (missing script_path)"
+                        try {
+                            $state = Invoke-SessionGetState -Arguments @{}
+                            Invoke-SessionUpdate -Arguments @{
+                                consecutive_failures = $state.state.consecutive_failures + 1
+                                tasks_skipped = $state.state.tasks_skipped + 1
+                            } | Out-Null
+                        } catch { Write-BotLog -Level Debug -Message "Non-critical operation failed" -Exception $_ }
+                        $processData.status = 'stopped'
+                        $processData.failed_at = (Get-Date).ToUniversalTime().ToString("o")
+                        Write-ProcessFile -Id $procId -Data $processData
                         break
                     }
                     $TaskId = $null; $processData.task_id = $null; $processData.task_name = $null
@@ -448,6 +458,16 @@ try {
                         Write-Status "Mandatory task failed: $($task.name) - stopping workflow" -Type Error
                         Write-ProcessActivity -Id $procId -ActivityType "error" -Message "Mandatory task failed, stopping workflow: $($task.name)"
                         Write-Diag "EXIT: Mandatory task failure (script not found)"
+                        try {
+                            $state = Invoke-SessionGetState -Arguments @{}
+                            Invoke-SessionUpdate -Arguments @{
+                                consecutive_failures = $state.state.consecutive_failures + 1
+                                tasks_skipped = $state.state.tasks_skipped + 1
+                            } | Out-Null
+                        } catch { Write-BotLog -Level Debug -Message "Non-critical operation failed" -Exception $_ }
+                        $processData.status = 'stopped'
+                        $processData.failed_at = (Get-Date).ToUniversalTime().ToString("o")
+                        Write-ProcessFile -Id $procId -Data $processData
                         break
                     }
                     $TaskId = $null; $processData.task_id = $null; $processData.task_name = $null
@@ -556,6 +576,9 @@ try {
                             tasks_skipped = $state.state.tasks_skipped + 1
                         } | Out-Null
                     } catch { Write-BotLog -Level Debug -Message "Non-critical operation failed" -Exception $_ }
+                    $processData.status = 'stopped'
+                    $processData.failed_at = (Get-Date).ToUniversalTime().ToString("o")
+                    Write-ProcessFile -Id $procId -Data $processData
                     break
                 }
             }
@@ -1197,6 +1220,9 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
                         tasks_skipped = $state.state.tasks_skipped + 1
                     } | Out-Null
                 } catch { Write-BotLog -Level Debug -Message "Non-critical operation failed" -Exception $_ }
+                $processData.status = 'stopped'
+                $processData.failed_at = (Get-Date).ToUniversalTime().ToString("o")
+                Write-ProcessFile -Id $procId -Data $processData
                 break
             }
 

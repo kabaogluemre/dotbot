@@ -443,20 +443,30 @@ function New-TaskWorktree {
         [Parameter(Mandatory)][string]$TaskId,
         [Parameter(Mandatory)][string]$TaskName,
         [Parameter(Mandatory)][string]$ProjectRoot,
-        [Parameter(Mandatory)][string]$BotRoot
+        [Parameter(Mandatory)][string]$BotRoot,
+        [string]$BranchName = ""   # Optional: if provided, overrides the default task/{shortId}-{slug} naming
     )
 
     Initialize-WorktreeMap -BotRoot $BotRoot
 
     $shortId = $TaskId.Substring(0, [Math]::Min(8, $TaskId.Length))
-    $slug = Get-TaskSlug -TaskName $TaskName
-    $branchName = "task/$shortId-$slug"
 
-    # Worktree path: {repo-parent}/worktrees/{repo-name}/task-{shortId}-{slug}/
+    # Determine branch name and worktree path
+    # Shared branch mode: caller provides BranchName (e.g. "feature/issue-42")
+    # Normal mode: derive from task ID and name
+    $isSharedBranch = $BranchName -ne ""
+    if (-not $isSharedBranch) {
+        $slug = Get-TaskSlug -TaskName $TaskName
+        $BranchName = "task/$shortId-$slug"
+    }
+
+    # Worktree path: {repo-parent}/worktrees/{repo-name}/{branch-slug}/
+    # For shared branches (e.g. "feature/issue-42"), sanitize slashes to dashes
     $repoParent = Split-Path $ProjectRoot -Parent
     $repoName = Split-Path $ProjectRoot -Leaf
     $worktreeDir = Join-Path $repoParent "worktrees\$repoName"
-    $worktreePath = Join-Path $worktreeDir "task-$shortId-$slug"
+    $worktreeDirName = $BranchName -replace '[/\\]', '-' -replace '[^a-zA-Z0-9._-]', '-'
+    $worktreePath = Join-Path $worktreeDir $worktreeDirName
 
     if (-not (Test-Path $worktreeDir)) {
         New-Item -Path $worktreeDir -ItemType Directory -Force | Out-Null
@@ -472,18 +482,19 @@ function New-TaskWorktree {
                 $lockedMap = Read-WorktreeMap
                 if (-not $lockedMap.ContainsKey($TaskId)) {
                     $lockedMap[$TaskId] = @{
-                        worktree_path = $worktreePath
-                        branch_name   = $branchName
-                        base_branch   = $existingBaseBranch
-                        task_name     = $TaskName
-                        created_at    = (Get-Date).ToUniversalTime().ToString("o")
+                        worktree_path  = $worktreePath
+                        branch_name    = $BranchName
+                        base_branch    = $existingBaseBranch
+                        task_name      = $TaskName
+                        shared_branch  = $isSharedBranch
+                        created_at     = (Get-Date).ToUniversalTime().ToString("o")
                     }
                     Write-WorktreeMap -Map $lockedMap
                 }
             }
             return @{
                 worktree_path = $worktreePath
-                branch_name   = $branchName
+                branch_name   = $BranchName
                 success       = $true
                 message       = "Worktree already exists"
             }
@@ -595,11 +606,12 @@ function New-TaskWorktree {
         Invoke-WorktreeMapLocked -Action {
             $lockedMap = Read-WorktreeMap
             $lockedMap[$TaskId] = @{
-                worktree_path = $worktreePath
-                branch_name   = $branchName
-                base_branch   = $baseBranch
-                task_name     = $TaskName
-                created_at    = (Get-Date).ToUniversalTime().ToString("o")
+                worktree_path  = $worktreePath
+                branch_name    = $BranchName
+                base_branch    = $baseBranch
+                task_name      = $TaskName
+                shared_branch  = $isSharedBranch
+                created_at     = (Get-Date).ToUniversalTime().ToString("o")
             }
             Write-WorktreeMap -Map $lockedMap
         }
@@ -1070,6 +1082,13 @@ function Remove-OrphanWorktrees {
         $entry = $map[$taskId]
         $worktreePath = $entry.worktree_path
         $branchName = $entry.branch_name
+
+        # Shared branch worktrees stay open — the branch lives on GitHub via a PR
+        # and will be cleaned up manually after merge. Skip orphan removal.
+        if ($entry.shared_branch -eq $true) {
+            Write-Diag "Skipping orphan cleanup for shared branch worktree: $branchName"
+            continue
+        }
 
         # Kill any lingering processes in the orphan worktree before cleanup
         if ($worktreePath -and (Test-Path $worktreePath)) {

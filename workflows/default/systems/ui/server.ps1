@@ -2074,6 +2074,23 @@ $docContext
                                     if (Test-Path $tasksBaseDir) {
                                         Clear-WorkflowTasks -TasksBaseDir $tasksBaseDir -WorkflowName $wfName
                                     }
+
+                                    # Clean declared task outputs from previous run so stale files
+                                    # don't influence the current run's agents
+                                    if ($manifest.tasks) {
+                                        foreach ($td in @($manifest.tasks)) {
+                                            if (-not $td -or -not $td['outputs']) { continue }
+                                            foreach ($out in @($td['outputs'])) {
+                                                $outPath = Join-Path $projectRoot $out
+                                                $resolved = Resolve-Path $outPath -ErrorAction SilentlyContinue
+                                                if ($resolved) {
+                                                    foreach ($r in $resolved) {
+                                                        Remove-Item $r.Path -Recurse -Force -ErrorAction SilentlyContinue
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
 
                                 # Create tasks from manifest

@@ -103,6 +103,8 @@ $entityModel = if (Test-Path (Join-Path $productDir "entity-model.md")) { "Read 
 . (Join-Path $botRoot "systems\runtime\modules\task-reset.ps1")
 # Post-script runner (shared helper)
 . (Join-Path $botRoot "systems\runtime\modules\post-script-runner.ps1")
+# Workflow manifest utilities (Get-ActiveWorkflowManifest, Read-WorkflowManifest)
+. (Join-Path $botRoot "systems\runtime\modules\workflow-manifest.ps1")
 $tasksBaseDir = Join-Path $botRoot "workspace\tasks"
 
 # Recover orphaned tasks
@@ -112,6 +114,31 @@ Reset-SkippedTasks -TasksBaseDir $tasksBaseDir | Out-Null
 
 # Clean up orphan worktrees
 Remove-OrphanWorktrees -ProjectRoot $projectRoot -BotRoot $botRoot
+
+# ── Shared branch: read from workflow manifest ─────────────────────────────
+# If workflow.yaml declares shared_branch (e.g. "feature/issue-{input.issue_number}"),
+# all tasks in this run share one worktree/branch instead of getting per-task branches.
+$sharedBranch = $null
+$workflowManifest = Get-ActiveWorkflowManifest -BotRoot $botRoot
+if ($workflowManifest -and $workflowManifest.shared_branch) {
+    # Resolve {input.issue_number} from the kickstart prompt file
+    $promptFile = Join-Path $botRoot ".control\launchers\kickstart-prompt.txt"
+    $resolved = $workflowManifest.shared_branch
+    if (Test-Path $promptFile) {
+        $promptText = (Get-Content $promptFile -Raw -ErrorAction SilentlyContinue).Trim()
+        $issueNumber = $promptText -replace '\D', ''   # digits only
+        if ($issueNumber) {
+            $resolved = $resolved -replace '\{input\.issue_number\}', $issueNumber
+        }
+    }
+    if ($resolved -and $resolved -notmatch '\{') {
+        $sharedBranch = $resolved
+        Write-Status "Shared branch mode: $sharedBranch" -Type Info
+        Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Shared branch mode active: $sharedBranch"
+    } else {
+        Write-Status "shared_branch template could not be resolved (prompt file missing or no issue number): $resolved" -Type Warn
+    }
+}
 
 # Initialize task index
 Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
@@ -818,7 +845,8 @@ Do NOT implement the task. Your job is research and preparation only.
                     Write-Status "Branch guard warning: $($_.Exception.Message)" -Type Warn
                 }
                 $wtResult = New-TaskWorktree -TaskId $task.id -TaskName $task.name `
-                    -ProjectRoot $projectRoot -BotRoot $botRoot
+                    -ProjectRoot $projectRoot -BotRoot $botRoot `
+                    -BranchName ($sharedBranch ?? "")
                 if ($wtResult.success) {
                     $worktreePath = $wtResult.worktree_path
                     $branchName = $wtResult.branch_name
@@ -1066,8 +1094,46 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
         Write-Diag "Task result: success=$taskSuccess"
 
         if ($taskSuccess) {
-            # Squash-merge task branch to main
-            if ($worktreePath) {
+            # Squash-merge task branch to main — skipped in shared branch mode
+            # (the branch stays open; it will be merged via PR after all tasks complete)
+            if ($worktreePath -and $sharedBranch) {
+                Write-Status "Shared branch — committing and pushing '$($task.name)'..." -Type Process
+                Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Shared branch: committing '$($task.name)' to $sharedBranch"
+                try {
+                    $safeTaskName = $task.name -replace '[^\w\s-]', '' -replace '\s+', '-'
+                    $commitMsg = "task: $safeTaskName [skip ci]"
+                    $gitAddOutput  = git -C $worktreePath add -A 2>&1
+                    $gitAddExit    = $LASTEXITCODE
+                    $gitCommitOutput = git -C $worktreePath commit -m $commitMsg 2>&1
+                    $gitCommitExit   = $LASTEXITCODE
+                    $gitPushOutput = git -C $worktreePath push --set-upstream origin $sharedBranch 2>&1
+                    $gitPushExit   = $LASTEXITCODE
+
+                    if ($gitCommitExit -eq 0) {
+                        if ($gitPushExit -eq 0) {
+                            Write-Status "Pushed '$sharedBranch' after task '$($task.name)'" -Type Complete
+                            Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Pushed $($sharedBranch): $($commitMsg)"
+                        } else {
+                            $pushErr = $gitPushOutput -join ' '
+                            Write-Status "Push failed for '$sharedBranch': $pushErr" -Type Warn
+                            Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Push failed after '$($task.name)': $pushErr"
+                        }
+                    } else {
+                        # Nothing to commit is exit code 1 with "nothing to commit" message — not a real error
+                        $commitOut = $gitCommitOutput -join ' '
+                        if ($commitOut -match 'nothing to commit') {
+                            Write-Status "Shared branch: nothing to commit after '$($task.name)'" -Type Info
+                            Write-ProcessActivity -Id $procId -ActivityType "text" -Message "No new files staged after '$($task.name)' — skipping push"
+                        } else {
+                            Write-Status "Commit failed for '$sharedBranch': $commitOut" -Type Warn
+                            Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Commit failed after '$($task.name)': $commitOut"
+                        }
+                    }
+                } catch {
+                    Write-Status "Git commit/push failed: $($_.Exception.Message)" -Type Warn
+                    Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Git error after '$($task.name)': $($_.Exception.Message)"
+                }
+            } elseif ($worktreePath) {
                 Write-Status "Merging task branch to main..." -Type Process
                 $mergeResult = Complete-TaskWorktree -TaskId $task.id -ProjectRoot $projectRoot -BotRoot $botRoot
                 if ($mergeResult.success) {
@@ -1132,21 +1198,27 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
 
             # Clean up worktree for failed/skipped tasks
             if ($worktreePath) {
-                Write-Status "Cleaning up worktree for failed task..." -Type Info
-                try {
-                    Remove-Junctions -WorktreePath $worktreePath -ErrorOnFailure $false | Out-Null
-                    git -C $projectRoot worktree remove $worktreePath --force 2>$null
-                    git -C $projectRoot branch -D $branchName 2>$null
-                } finally {
-                    # Map removal always runs even if junction/worktree cleanup throws (Fix: inconsistent registry)
-                    Initialize-WorktreeMap -BotRoot $botRoot
-                    Invoke-WorktreeMapLocked -Action {
-                        $cleanupMap = Read-WorktreeMap
-                        $cleanupMap.Remove($task.id)
-                        Write-WorktreeMap -Map $cleanupMap
+                if ($sharedBranch) {
+                    # Shared branch: preserve the worktree — other tasks in this pipeline still need it
+                    Write-Status "Shared branch — preserving worktree '$sharedBranch' after task failure" -Type Warn
+                    Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Shared branch: worktree preserved after failure of '$($task.name)' — branch $sharedBranch kept open"
+                } else {
+                    Write-Status "Cleaning up worktree for failed task..." -Type Info
+                    try {
+                        Remove-Junctions -WorktreePath $worktreePath -ErrorOnFailure $false | Out-Null
+                        git -C $projectRoot worktree remove $worktreePath --force 2>$null
+                        git -C $projectRoot branch -D $branchName 2>$null
+                    } finally {
+                        # Map removal always runs even if junction/worktree cleanup throws (Fix: inconsistent registry)
+                        Initialize-WorktreeMap -BotRoot $botRoot
+                        Invoke-WorktreeMapLocked -Action {
+                            $cleanupMap = Read-WorktreeMap
+                            $cleanupMap.Remove($task.id)
+                            Write-WorktreeMap -Map $cleanupMap
+                        }
+                        # Re-assert base branch after failed-task cleanup (Fix: wrong-branch merge)
+                        try { Assert-OnBaseBranch -ProjectRoot $projectRoot | Out-Null } catch { Write-BotLog -Level Warn -Message "Task operation failed" -Exception $_ }
                     }
-                    # Re-assert base branch after failed-task cleanup (Fix: wrong-branch merge)
-                    try { Assert-OnBaseBranch -ProjectRoot $projectRoot | Out-Null } catch { Write-BotLog -Level Warn -Message "Task operation failed" -Exception $_ }
                 }
             }
 

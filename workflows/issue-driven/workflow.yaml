@@ -1,0 +1,151 @@
+name: issue-driven
+version: "1.0"
+description: >-
+  GitHub issue → technical design → test case design → implementation → PR.
+  Each phase runs as a dotbot two-phase task (analysis + execution) on a shared
+  feature branch. The branch stays open until all phases complete, then a PR is
+  opened automatically.
+icon: code
+min_dotbot_version: "4.0"
+shared_branch: "feature/issue-{input.issue_number}"
+
+# ── Requires ─────────────────────────────────────────────────────────────────
+
+requires:
+  env_vars:
+    - var: GITHUB_TOKEN
+      name: "GitHub Personal Access Token"
+      message: "GITHUB_TOKEN is required for the GitHub MCP server"
+      hint: "Create at https://github.com/settings/tokens — needs 'repo', 'read:org', 'read:user' scopes. Set in your shell or .env.local"
+  mcp_servers:
+    - name: dotbot
+      message: "Dotbot MCP server is required for task and session management"
+      hint: "Run 'dotbot init --force' to re-register the dotbot server"
+    - name: github
+      message: "GitHub MCP server is required to read issues and open PRs"
+      hint: "Add the GitHub MCP server to your Claude Code MCP config"
+  cli_tools:
+    - name: git
+      message: "git CLI is required for branch management"
+    - name: gh
+      message: "GitHub CLI is required for PR creation"
+      hint: "Install from https://cli.github.com/ and run 'gh auth login'"
+
+# ── MCP Servers (auto-merged into .mcp.json on 'dotbot workflow add') ─────────
+
+mcp_servers:
+  github:
+    command: npx
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-github"
+    env:
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+
+# ── Pipeline ─────────────────────────────────────────────────────────────────
+#
+# [PENDING: pipeline infrastructure] The `pipeline` block is the new concept
+# described in the design session. It instructs the workflow runner to:
+#   - Create one shared feature branch for all tasks (instead of per-task branches)
+#   - Suppress squash-merge after each task (branch stays alive)
+#   - On final task completion: open a PR via `gh pr create` then clean up
+#   - Clean declared task outputs at the start of each new run
+#
+# Until pipeline is implemented in core, tasks run with skip_worktree: true
+# and branch/PR management is handled manually by the execution prompts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+pipeline:
+  shared_branch: "feature/issue-{input.issue_number}"
+  on_complete: create_pr
+  pr_target: main
+  cleanup_outputs_on_start: true
+
+# ── Form (UI input) ───────────────────────────────────────────────────────────
+
+form:
+  modes:
+    - id: run_issue
+      label: "Run Issue Pipeline"
+      description: "Design, implement, and test a GitHub issue end-to-end on a shared feature branch, then open a PR."
+      button: "RUN ISSUE"
+      prompt_placeholder: "GitHub issue number (e.g. 42)"
+      show_interview: false
+      show_files: false
+
+  fields:
+    - name: issue_number
+      type: number
+      label: "Issue Number"
+      required: true
+      placeholder: "42"
+
+# ── Task pipeline ─────────────────────────────────────────────────────────────
+#
+# Dependency chain:
+#   Design Issue
+#     └─ Design Test Cases
+#          └─ Implement Issue
+#               └─ Unit Tests
+#                    └─ Integration Tests  (optional, runs after unit tests)
+#
+# All tasks share the pipeline branch (feature/issue-{N}).
+# Analysis phase: 98-analyse-task.md + applicable_agents persona
+# Execution phase: the numbered prompt in recipes/prompts/
+# ─────────────────────────────────────────────────────────────────────────────
+
+tasks:
+  # ── Phase 1: Technical Design ────────────────────────────────────────────
+  - name: "Design Issue"
+    type: prompt
+    workflow: "10-design-issue.md"
+    applicable_agents: ["design-issue-agent"]
+    needs_interview: true
+    outputs:
+      - "docs/designs/issue-{input.issue_number}-*/design.md"
+    priority: 0
+
+  # ── Phase 2: Test Case Design ────────────────────────────────────────────
+  - name: "Design Test Cases"
+    type: prompt
+    workflow: "11-design-test-cases.md"
+    applicable_agents: ["design-test-cases-agent"]
+    needs_interview: true
+    depends_on: ["Design Issue"]
+    outputs:
+      - "docs/designs/issue-{input.issue_number}-*/test-cases.md"
+    priority: 1
+
+  # ── Phase 3: Implementation ───────────────────────────────────────────────
+  - name: "Implement Issue"
+    type: prompt
+    workflow: "12-implement-issue.md"
+    applicable_agents: ["implement-issue-agent"]
+    depends_on: ["Design Issue", "Design Test Cases"]
+    priority: 2
+
+  # ── Phase 4a: Unit Tests ──────────────────────────────────────────────────
+  - name: "Unit Tests"
+    type: prompt
+    workflow: "14-unit-test-pr.md"
+    applicable_agents: ["unit-test-pr-agent"]
+    depends_on: ["Implement Issue"]
+    priority: 3
+
+  # ── Phase 4b: Integration Tests ───────────────────────────────────────────
+  - name: "Integration Tests"
+    type: prompt
+    workflow: "15-integration-test-pr.md"
+    applicable_agents: ["integration-test-pr-agent"]
+    depends_on: ["Unit Tests"]
+    optional: true
+    priority: 4
+
+  # ── Phase 5: Open PR ──────────────────────────────────────────────────────
+  # Script task: runs open-pr.ps1 which calls `gh pr create` for the shared
+  # feature branch. Depends on all test phases so it runs last.
+  - name: "Open PR"
+    type: script
+    script_path: "scripts/open-pr.ps1"
+    depends_on: ["Unit Tests", "Integration Tests"]
+    priority: 5

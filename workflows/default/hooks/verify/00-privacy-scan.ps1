@@ -69,10 +69,34 @@ if ($StagedOnly) {
     # Pre-commit mode: only scan files being committed
     $allFiles = @(git -C $repoRoot diff --cached --name-only --diff-filter=ACM 2>$null) | Where-Object { $_ }
 } else {
-    # Full repo scan
-    $trackedFiles = git -C $repoRoot ls-files 2>$null
-    $untrackedFiles = git -C $repoRoot ls-files --others --exclude-standard 2>$null
-    $allFiles = @($trackedFiles) + @($untrackedFiles) | Where-Object { $_ } | Sort-Object -Unique
+    # task_mark_done mode: only scan files changed on this branch vs the merge base.
+    # This prevents pre-existing violations in the repo from blocking agent tasks.
+    # Find the common ancestor with the default branch (main/master/develop).
+    $baseBranch = $null
+    foreach ($candidate in @('main', 'master', 'develop')) {
+        $ref = git -C $repoRoot rev-parse --verify "origin/$candidate" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $ref) { $baseBranch = "origin/$candidate"; break }
+        $ref = git -C $repoRoot rev-parse --verify $candidate 2>$null
+        if ($LASTEXITCODE -eq 0 -and $ref) { $baseBranch = $candidate; break }
+    }
+
+    if ($baseBranch) {
+        # Diff-only: files added or modified on this branch since the merge base
+        $mergeBase = git -C $repoRoot merge-base HEAD $baseBranch 2>$null
+        if ($LASTEXITCODE -eq 0 -and $mergeBase) {
+            $allFiles = @(git -C $repoRoot diff --name-only --diff-filter=ACM "$mergeBase..HEAD" 2>$null) | Where-Object { $_ }
+        } else {
+            # No merge base — fall back to last commit only
+            $allFiles = @(git -C $repoRoot diff --name-only --diff-filter=ACM HEAD~1..HEAD 2>$null) | Where-Object { $_ }
+        }
+    } else {
+        # Cannot determine base branch — fall back to last commit only
+        $allFiles = @(git -C $repoRoot diff --name-only --diff-filter=ACM HEAD~1..HEAD 2>$null) | Where-Object { $_ }
+    }
+
+    # Also include untracked new files (not yet committed) as they may contain secrets
+    $untrackedFiles = @(git -C $repoRoot ls-files --others --exclude-standard 2>$null) | Where-Object { $_ }
+    $allFiles = @($allFiles) + @($untrackedFiles) | Where-Object { $_ } | Sort-Object -Unique
 }
 
 foreach ($relativePath in $allFiles) {
@@ -138,7 +162,7 @@ foreach ($relativePath in $allFiles) {
 # Deduplicate issues (same file/line can match multiple patterns)
 $uniqueIssues = $issues | Sort-Object { "$($_.issue)" } -Unique
 
-$details['scan_mode'] = if ($StagedOnly) { 'staged' } else { 'full' }
+$details['scan_mode'] = if ($StagedOnly) { 'staged' } elseif ($baseBranch) { "diff-from-$baseBranch" } else { 'diff-last-commit' }
 
 if ($StagedOnly -and $uniqueIssues.Count -gt 0) {
     [Console]::Error.WriteLine("")

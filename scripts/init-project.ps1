@@ -813,49 +813,90 @@ if (Test-Path $initScript) {
 # Create .mcp.json with MCP server configuration
 # ---------------------------------------------------------------------------
 $mcpJsonPath = Join-Path $ProjectDir ".mcp.json"
-if (Test-Path $mcpJsonPath) {
-    Write-DotbotWarning ".mcp.json already exists -- skipping"
+
+# Playwright MCP output goes to .bot/.control/ (gitignored) — uses a relative
+# path so .mcp.json doesn't contain absolute user paths that trip the privacy scan
+$pwOutputDir = ".bot/.control/playwright-output"
+
+# On Windows, npx must be invoked via 'cmd /c' for stdio MCP servers
+if ($IsWindows) {
+    $npxCommand = "cmd"
+    $npxContext7Args = @("/c", "npx", "-y", "@upstash/context7-mcp@latest")
+    $npxPlaywrightArgs = @("/c", "npx", "-y", "@playwright/mcp@latest", "--output-dir", $pwOutputDir)
 } else {
-    Write-Status "Creating .mcp.json (dotbot + Context7 + Playwright)"
+    $npxCommand = "npx"
+    $npxContext7Args = @("-y", "@upstash/context7-mcp@latest")
+    $npxPlaywrightArgs = @("-y", "@playwright/mcp@latest", "--output-dir", $pwOutputDir)
+}
 
-    # Playwright MCP output goes to .bot/.control/ (gitignored) — uses a relative
-    # path so .mcp.json doesn't contain absolute user paths that trip the privacy scan
-    $pwOutputDir = ".bot/.control/playwright-output"
+# Core MCP server entries owned by the framework. User-added entries in an
+# existing .mcp.json (e.g., `github`, `figma`) are preserved verbatim.
+$coreServers = [ordered]@{
+    dotbot = [ordered]@{
+        type    = "stdio"
+        command = "pwsh"
+        args    = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ".bot\systems\mcp\dotbot-mcp.ps1")
+        env     = @{}
+    }
+    context7 = [ordered]@{
+        type    = "stdio"
+        command = $npxCommand
+        args    = $npxContext7Args
+        env     = @{}
+    }
+    playwright = [ordered]@{
+        type    = "stdio"
+        command = $npxCommand
+        args    = $npxPlaywrightArgs
+        env     = @{}
+    }
+}
 
-    # On Windows, npx must be invoked via 'cmd /c' for stdio MCP servers
-    if ($IsWindows) {
-        $npxCommand = "cmd"
-        $npxContext7Args = @("/c", "npx", "-y", "@upstash/context7-mcp@latest")
-        $npxPlaywrightArgs = @("/c", "npx", "-y", "@playwright/mcp@latest", "--output-dir", $pwOutputDir)
-    } else {
-        $npxCommand = "npx"
-        $npxContext7Args = @("-y", "@upstash/context7-mcp@latest")
-        $npxPlaywrightArgs = @("-y", "@playwright/mcp@latest", "--output-dir", $pwOutputDir)
+if (Test-Path $mcpJsonPath) {
+    Write-Status "Merging .mcp.json (preserving user entries)"
+    try {
+        $existing = Get-Content $mcpJsonPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw ".mcp.json exists but is not valid JSON: $($_.Exception.Message)"
     }
 
-    $mcpConfig = @{
-        mcpServers = [ordered]@{
-            dotbot = [ordered]@{
-                type    = "stdio"
-                command = "pwsh"
-                args    = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ".bot\systems\mcp\dotbot-mcp.ps1")
-                env     = @{}
-            }
-            context7 = [ordered]@{
-                type    = "stdio"
-                command = $npxCommand
-                args    = $npxContext7Args
-                env     = @{}
-            }
-            playwright = [ordered]@{
-                type    = "stdio"
-                command = $npxCommand
-                args    = $npxPlaywrightArgs
-                env     = @{}
+    # Build merged servers in canonical order: core first, then any user-added.
+    $mergedServers = [ordered]@{}
+
+    $existingHasMcpServers = $existing -and $existing.PSObject.Properties['mcpServers'] -and $existing.mcpServers
+    foreach ($coreName in $coreServers.Keys) {
+        $existingEntry = $null
+        if ($existingHasMcpServers -and $existing.mcpServers.PSObject.Properties[$coreName]) {
+            $existingEntry = $existing.mcpServers.$coreName
+        }
+        if ($existingEntry -and -not $Force) {
+            # Preserve user-tweaked core entry (upgrade only with -Force)
+            $mergedServers[$coreName] = $existingEntry
+            Write-DotbotCommand "Kept existing '$coreName' entry (use -Force to refresh)"
+        } else {
+            $mergedServers[$coreName] = $coreServers[$coreName]
+            $action = if ($existingEntry) { "Refreshed" } else { "Added" }
+            Write-DotbotCommand "$action '$coreName' entry"
+        }
+    }
+
+    # Preserve any non-core (user-added) servers verbatim
+    if ($existingHasMcpServers) {
+        foreach ($prop in $existing.mcpServers.PSObject.Properties) {
+            if (-not $coreServers.Contains($prop.Name)) {
+                $mergedServers[$prop.Name] = $prop.Value
+                Write-DotbotCommand "Preserved '$($prop.Name)' entry"
             }
         }
     }
-    $mcpConfig | ConvertTo-Json -Depth 5 | Set-Content -Path $mcpJsonPath -Encoding UTF8
+
+    $mcpConfig = @{ mcpServers = $mergedServers }
+    $mcpConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $mcpJsonPath -Encoding UTF8
+    Write-Success "Merged .mcp.json"
+} else {
+    Write-Status "Creating .mcp.json (dotbot + Context7 + Playwright)"
+    $mcpConfig = @{ mcpServers = $coreServers }
+    $mcpConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $mcpJsonPath -Encoding UTF8
     Write-Success "Created .mcp.json"
 }
 

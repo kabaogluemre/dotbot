@@ -648,6 +648,13 @@ if (Test-Path $mcpJsonPath) {
 
 **Önerilen fix:** Mevcut `.mcp.json`'ı parse et, core entry'ler (`dotbot`, `context7`, `playwright`) yoksa ekle, varsa dokunma. Diğer entry'leri (kullanıcı eklentileri) olduğu gibi koru.
 
+**Fix uygulandı:**
+- `init-project.ps1` `.mcp.json` blok'u yeniden yazıldı
+- Var olan dosyada core entry'ler (dotbot/context7/playwright) yoksa ekleniyor
+- Var olan core entry'ler `-Force` olmadan korunur; `-Force` ile yenilenir
+- User-added entry'ler (github, figma vb.) her zaman verbatim korunur
+- Invalid JSON ise actionable hata fırlatılıyor (eskiden sessiz skip'ti)
+
 ---
 
 ### Bug 14 — Agent'lar repo adını settings/skill dosyalarından tahmin ediyor, framework resolve etmiyor
@@ -690,7 +697,7 @@ Framework git remote'u zaten biliyor ama agent'a iletmiyordu. Proje-başına-har
 | 9 | Açık | **Kritik** | ClaudeCLI.psm1 + Invoke-WorkflowProcess — worktree isolation tamamen bozuk |
 | 11 | Prompt fix revert, açık | Yüksek | Hem prompt'lar hem framework completion check |
 | 12 | Açık | Yüksek | WorktreeManager + Invoke-WorkflowProcess |
-| 13 | Açık | Orta | init-project.ps1 merge mantığı |
+| 13 | Fix uygulandı | — | init-project.ps1 merge mantığı |
 | 5 | Kısmi fix | Düşük | Gitignore OK, `commit-bot-state.ps1` feature/ prefix kaldı |
 | 10 | Fix uygulandı | — | — |
 | 14 | Fix uygulandı | — | Skill dosyaları kapsam dışı |

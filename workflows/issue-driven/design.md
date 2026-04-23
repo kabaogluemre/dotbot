@@ -518,11 +518,16 @@ could not add label: 'needs-review' not found
 ```
 workspace/tasks/**/*.json
 !workspace/tasks/samples/**
+workspace/product/interview-answers.json
+workspace/decisions/**/*.json
+!workspace/decisions/samples/**
 ```
 
-Yeni `dotbot init`'ler `.bot/.gitignore`'da bunu alır. Mevcut projelerde tracked olan JSON'lar `git rm --cached` ile index'ten çıkarıldı.
+Yeni `dotbot init`'ler `.bot/.gitignore`'da bunları alır. Mevcut projelerde tracked olan dosyalar `git rm --cached` ile index'ten çıkarıldı.
 
-**Kalan:** `commit-bot-state.ps1`'e `feature/` prefix kontrolü henüz eklenmedi. Ama Bug 9'un kök sebebi (agent main repo'da çalışıyor) çözünce bu davranış kendiliğinden düzelebilir.
+**Takip gözlemi:** clarantis-dotbot clean setup sonrası autonomous run'ında main'e yine commit düştü (`chore: save autonomous task state` — 4 dosya: 3 decision JSON + 1 interview-answers.json). Sebep code path değil, sadece gitignore eksikliğiydi. Interview/decision path'leri eklenerek giderildi.
+
+**Kalan:** `commit-bot-state.ps1`'e `feature/` prefix kontrolü henüz eklenmedi.
 
 ---
 
@@ -545,7 +550,7 @@ Sonuç:
 - Feature branch (shared_branch modunda `-fe154c` gibi) boş kalıyor
 - `commit-bot-state.ps1` da main'e commit ediyor — Bug 5 bunun alt kümesi
 
-**Deneysel doğrulama (clarantis-dotbot):** `feat: extend Analysis Worker...` commit'i feature/issue-1-fe154c yerine main'e gitti. `git branch --contains aa40447` → `main`.
+**Deneysel doğrulama (clarantis-dotbot — ilk seferki run):** `feat: extend Analysis Worker...` commit'i feature/issue-1-fe154c yerine main'e gitti. `git branch --contains aa40447` → `main`. (NOT: O repo tamamen reset edilip clean setup'la tekrar denendiğinde bu semptom reprodüks edilmedi — bugünkü main commit'leri sadece gitignore eksikliğindendi, ClaudeCLI cwd değil. Bu bug hâlâ teoride geçerli olabilir ama saha gözlemi revize edildi — confirmed reproduction gerek.)
 
 **Yorumda sebebi:** MCP discovery için `.mcp.json` proje kökünde. Worktree isolation ile MCP discovery bir arada çözülmemiş.
 
@@ -694,7 +699,7 @@ Framework git remote'u zaten biliyor ama agent'a iletmiyordu. Proje-başına-har
 
 | Bug | Status | Öncelik | Kapsam |
 |---|---|---|---|
-| 9 | Açık | **Kritik** | ClaudeCLI.psm1 + Invoke-WorkflowProcess — worktree isolation tamamen bozuk |
+| 9 | Şüpheli | Orta (reprodüksiyon bekliyor) | ClaudeCLI.psm1 + Invoke-WorkflowProcess — ilk vakadaki "main'e feat commit" gitignore fix sonrası reprodüks edilemedi; teoride hâlâ geçerli ama confirmed değil |
 | 11 | Prompt fix revert, açık | Yüksek | Hem prompt'lar hem framework completion check |
 | 12 | Açık | Yüksek | WorktreeManager + Invoke-WorkflowProcess |
 | 13 | Fix uygulandı | — | init-project.ps1 merge mantığı |

@@ -726,10 +726,9 @@ Do NOT implement the task. Your job is research and preparation only.
                 if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
                 if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
-                # Run Claude in the task worktree so file edits land on the task/shared branch,
-                # not on the project root's current branch. Worktree has a hardlinked .mcp.json
-                # so MCP discovery still works.
-                if ($worktreePath) { $streamArgs['WorkingDirectory'] = $worktreePath }
+                # Analysis phase runs before worktree creation (worktree is created once
+                # per task, after analysis decides the task should proceed). Claude runs
+                # in project root here — read-only per Phase 1 hard limits in the prompt.
                 Invoke-ProviderStream @streamArgs
                 $exitCode = 0
             } catch {

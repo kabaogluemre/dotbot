@@ -705,6 +705,37 @@ if (Test-Path $mcpJsonPath) {
 
 ---
 
+### Bug 15 — `.mcp.json` github server'ı yanlış env var adı kullanıyor (`GITHUB_TOKEN` vs `GITHUB_PERSONAL_ACCESS_TOKEN`)
+
+**Dosyalar:**
+- `scripts/init-project.ps1` (dotbot tarafından oluşturulmuyor — kullanıcı veya skill'ler elle ekliyor)
+- `.claude/commands/README.md` ve diğer skill dosyaları (hardcoded `GITHUB_TOKEN` referansları)
+- Tüm issue-driven reference'ları (`.env.local` hint'inde, `requires.env_vars` key'inde)
+
+**Sorun:** `@modelcontextprotocol/server-github` npm paketi token'ı **`GITHUB_PERSONAL_ACCESS_TOKEN`** env var'ından okur. Ama dotbot ekosisteminde (skill'ler, `.env.local.example`, issue-driven workflow) token adı **`GITHUB_TOKEN`** olarak geçiyor. Sonuç:
+- Kullanıcı `GITHUB_TOKEN=ghp_...`'i `.env.local`'e yazıyor
+- `.mcp.json`'da `"env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" }` — token MCP server process'ine `GITHUB_TOKEN` adıyla geçiyor
+- Ama server **`GITHUB_PERSONAL_ACCESS_TOKEN`** bekliyor → undefined → anonymous request
+- Private repo'larda GitHub "Not Found" döndürüyor (auth olmayan kullanıcıya resource'un varlığını bildirmiyor)
+- Agent "issue not found" görüp şaşırıyor
+
+**Saha gözlemi (clarantis-dotbot):** Token `.env.local`'da doğru set edilmiş, `curl -H "Authorization: Bearer $GITHUB_TOKEN" /repos/Clarantis/clarantis-dotbot/issues/1` HTTP 200 döndü — token yetkili. Ama `mcp__github__get_issue` sürekli `Not Found: Resource not found: Not Found` verdi. Root cause: MCP server token'ı hiç görmemişti. `.mcp.json`'da env var adını `GITHUB_PERSONAL_ACCESS_TOKEN` yapınca düzeldi.
+
+**Yanıltıcı davranış:** GitHub private resource'lara anonymous erişimde 401/403 değil **404** döndürür (güvenlik için). Bu auth sorununu "repo yanlış" sanma tuzağına düşürür. Tüm debugging yanlış hipoteze yönelir.
+
+**Önerilen fix (framework seviyesinde):**
+
+1. **`init-project.ps1` GitHub MCP entry'si oluşturduğunda:** `GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"` kullan (user-friendly env var adını koru, MCP'ye doğru adla geçir).
+2. **issue-driven `workflow.yaml` MCP server definition:** aynı pattern.
+3. **Skill dosyalarındaki (`.claude/commands/*.md`) `GITHUB_TOKEN` referansları:** açıklayıcı not eklenebilir — "`.env.local`'da `GITHUB_TOKEN`, `.mcp.json`'da `GITHUB_PERSONAL_ACCESS_TOKEN` olarak map edilir".
+4. **Docs:** `README` ve `.env.example`'da bu mapping'i açıkla.
+
+**Alternatif:** Tüm ekosistemi `GITHUB_PERSONAL_ACCESS_TOKEN` adına geçir. Ama bu uzun ve az yaygın, kullanıcı deneyimini bozar. Mapping yaklaşımı daha iyi.
+
+**Fix uygulandı (clarantis-dotbot'ta spot patch):** `.mcp.json`'da `GITHUB_TOKEN` → `GITHUB_PERSONAL_ACCESS_TOKEN` değiştirildi. Framework'te kalıcı fix için init-project.ps1 ve workflow.yaml güncellemesi gerek.
+
+---
+
 ### Bug 14 — Agent'lar repo adını settings/skill dosyalarından tahmin ediyor, framework resolve etmiyor
 
 **Dosyalar:**
@@ -749,5 +780,6 @@ Framework git remote'u zaten biliyor ama agent'a iletmiyordu. Proje-başına-har
 | 5 | Kısmi fix | Düşük | Gitignore OK, `commit-bot-state.ps1` feature/ prefix kaldı |
 | 10 | Fix uygulandı | — | — |
 | 14 | Fix uygulandı | — | Skill dosyaları kapsam dışı |
+| 15 | Spot fix (clarantis), framework fix açık | Yüksek | init-project.ps1 + workflow.yaml — MCP env var adı `GITHUB_PERSONAL_ACCESS_TOKEN` olmalı |
 
 **Not:** Bug 9 düzelince Bug 5'in tüm yüzeysel semptomları (main'e chore commit'leri) kaybolur çünkü hepsi `commit-bot-state.ps1`'in yanlış branch'te çalışmasından kaynaklanıyor.

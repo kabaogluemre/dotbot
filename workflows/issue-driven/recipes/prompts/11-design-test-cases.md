@@ -6,6 +6,8 @@ version: 2.0
 
 # Design Test Cases — Execution Phase
 
+> **Repository:** `{{REPOSITORY}}` — use this for every GitHub API / MCP call in this prompt. Do not guess from settings or skill files; the framework resolves this from git remote.
+
 > The analysis phase already ran `98-analyse-task.md` with the `design-test-cases-agent` persona. It read the issue + design doc, performed a 6-angle scenario analysis (happy path, real-life production, failure & recovery, isolation, edge cases, data integrity), presented proposed Test Groups to the user via `task_mark_needs_input`, and stored approved test groups in `questions_resolved`. **Your job is the execution phase: write `test-cases.md`.**
 
 ## Step 1 — Load the Analysis Context

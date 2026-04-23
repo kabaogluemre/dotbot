@@ -507,3 +507,192 @@ could not add label: 'needs-review' not found
 `gh pr create` label yoksa tamamen fail ediyor (PR açmıyor).
 
 **Fix uygulandı:** `--label` parametresi ve issue'ya label ekleme bloğu `open-pr.ps1`'den tamamen kaldırıldı. PR açma işlemi artık label'a bağımlı değil.
+
+---
+
+## Session 2 — 2026-04-23 — Ek Bug'lar ve Status Güncellemeleri
+
+### Bug 5 — Status güncellemesi
+
+**Fix uygulandı (kısmi):** `workflows/default/.gitignore` template'ine eklendi:
+```
+workspace/tasks/**/*.json
+!workspace/tasks/samples/**
+```
+
+Yeni `dotbot init`'ler `.bot/.gitignore`'da bunu alır. Mevcut projelerde tracked olan JSON'lar `git rm --cached` ile index'ten çıkarıldı.
+
+**Kalan:** `commit-bot-state.ps1`'e `feature/` prefix kontrolü henüz eklenmedi. Ama Bug 9'un kök sebebi (agent main repo'da çalışıyor) çözünce bu davranış kendiliğinden düzelebilir.
+
+---
+
+### Bug 9 — Agent'lar worktree yerine project root'ta çalışıyor
+
+**Dosya:** `workflows/default/systems/runtime/ClaudeCLI/ClaudeCLI.psm1:577`
+
+**Sorun:** Claude her zaman `$global:DotbotProjectRoot`'ta başlatılıyor — worktree oluşturulsa da. Worktree path Claude process'ine hiç iletilmiyor:
+
+```powershell
+# Ensure claude.exe starts in the project root so it discovers .mcp.json
+if ($global:DotbotProjectRoot -and (Test-Path $global:DotbotProjectRoot)) {
+    $psi.WorkingDirectory = $global:DotbotProjectRoot
+}
+```
+
+Sonuç:
+- Agent dosyaları ana repo'da düzenliyor (main branch)
+- `git commit` ana repo'nun bulunduğu branch'e gidiyor → main
+- Feature branch (shared_branch modunda `-fe154c` gibi) boş kalıyor
+- `commit-bot-state.ps1` da main'e commit ediyor — Bug 5 bunun alt kümesi
+
+**Deneysel doğrulama (clarantis-dotbot):** `feat: extend Analysis Worker...` commit'i feature/issue-1-fe154c yerine main'e gitti. `git branch --contains aa40447` → `main`.
+
+**Yorumda sebebi:** MCP discovery için `.mcp.json` proje kökünde. Worktree isolation ile MCP discovery bir arada çözülmemiş.
+
+**Önerilen fix:**
+1. `Invoke-ClaudeStream`'a `-WorkingDirectory` parametresi ekle (default: `$global:DotbotProjectRoot`)
+2. `Invoke-WorkflowProcess.ps1` task başına `$worktreePath`'i geç
+3. `.mcp.json`'u worktree'ye junction et (MCP discovery bozulmasın)
+
+**Risk:** Kapsamlı değişiklik — MCP server'ları worktree'lerde spawn edilirken path resolution test edilmeli.
+
+---
+
+### Bug 10 — `open-pr.ps1` şablondan çözüyor, gerçek run state'ten değil
+
+**Dosya:** `workflows/issue-driven/scripts/open-pr.ps1`
+
+**Sorun:** Script shared branch adını workflow.yaml template'inden türetiyordu (`feature/issue-{input.issue_number}` → `feature/issue-1`). Ama framework her run'a bir hex suffix ekliyor (`feature/issue-1-fe154c`). Script template adıyla PR arıyor, eski run'ın PR'ını bulunca "zaten var" deyip skip ediyor — mevcut run için PR açılmıyor.
+
+**Fix uygulandı:** Script artık `.control/workflow-runs/{workflow}.json`'dan gerçek run'ın suffix'li branch adını okuyor:
+
+```powershell
+$runStateFile = Join-Path $controlDir "workflow-runs\$($activeWf.name).json"
+if (Test-Path $runStateFile) {
+    $runState = Get-Content $runStateFile -Raw | ConvertFrom-Json
+    if ($runState.shared_branch) { $sharedBranch = [string]$runState.shared_branch }
+}
+```
+
+---
+
+### Bug 11 — Agent `task_mark_skipped` vs `task_mark_done` karıştırıyor
+
+**Dosyalar:** Tüm `recipes/prompts/1{0-5}-*.md`
+
+**Sorun:** Pre-flight skip check'lerinde ("`needs-design` label yok → skip") agent `task_mark_skipped` çağırıyor. Ama bu tool sadece framework-level non-recoverable error'lar için:
+
+```yaml
+skip_reason:
+  enum: [non-recoverable, max-retries]
+```
+
+**Cascade:**
+1. Task `skipped/` klasörüne gidiyor
+2. Framework completion check sadece `in-progress/` ve `done/`'a bakıyor → "unexpected state" → retry
+3. Retry'da worktree zaten var → `fatal: ... already used` hatası
+4. 3 retry → max-retries → gerçekten skipped
+5. Dependent task'lar "blocked by skipped prerequisite" deadlock
+
+**Üç örtüşen kök neden:**
+1. `task_mark_skipped` hem "not applicable" hem "error terminal" için overload
+2. Completion check `skipped/` ve `cancelled/`'ı terminal kabul etmiyor
+3. State machine'de `failed` state yok — `skipped` bunun rolünü de üstleniyor
+
+**Prompt-level fix önerilmiş ve uygulanmıştı** (5 prompt'a "Use `task_mark_done` — NOT `task_mark_skipped`" uyarısı + summary metninde "Skipped —" → "No action required —" değişimi), **ancak MCP refactor rollback'iyle birlikte revert edildi**. Yeniden uygulanması gerekiyor.
+
+**Framework-level kalıcı fix:**
+- Completion check'i `skipped/` + `cancelled/` + `failed/` terminal kabul etsin
+- State machine'e `failed` ekleyip `skipped`'i "intentional skip only" olarak kısıtla
+
+---
+
+### Bug 12 — `Get-BaseBranch` shared branch için yanlış base seçiyor
+
+**Dosya:** `workflows/default/systems/runtime/modules/WorktreeManager.psm1:92-104`
+
+**Sorun:**
+```powershell
+function Get-BaseBranch {
+    $branch = git symbolic-ref --short HEAD   # current branch
+    if ($branch) { return $branch }            # → returned, fallback never reached
+    foreach (@('main', 'master')) { ... }
+}
+```
+
+Fonksiyon her zaman ana repo'nun mevcut branch'ini döndürür. Normal task branch'leri için mantıklı — ama shared branch modunda, önceki run'dan kalma feature branch'inde HEAD varsa yeni suffix'li branch oradan dallanıyor → yeni run kendi branch'ine önceki işi kopyalıyor → "zaten yapılmış" tespiti → execution fiilen no-op.
+
+**Önerilen fix:** 
+- `New-TaskWorktree`'ye `-BaseBranch` parametresi ekle
+- `Invoke-WorkflowProcess.ps1`'de shared branch modunda `issue_driven.pr_target` (default: `main`) ile override et
+- Veya `Assert-OnBaseBranch` çağrısını shared branch için force-main yap
+
+---
+
+### Bug 13 — `dotbot init --force` mevcut `.mcp.json`'ı merge etmiyor
+
+**Dosya:** `scripts/init-project.ps1:815-819`
+
+**Sorun:**
+```powershell
+if (Test-Path $mcpJsonPath) {
+    Write-DotbotWarning ".mcp.json already exists -- skipping"
+} else {
+    # create with dotbot + context7 + playwright
+}
+```
+
+`.mcp.json` varsa HİÇBİR şey yapmıyor. Kullanıcı önceden manuel bir MCP server eklemişse (github, figma vb.) veya bir workflow kendi MCP entry'sini bıraktıysa, `dotbot init --force` dotbot entry'sini eklemiyor → "Dotbot MCP server not registered" hatası.
+
+**Deneysel:** clarantis-dotbot reset sonrası `.mcp.json`'da sadece `github` entry kaldı (issue-driven workflow'dan). `dotbot init --force` çalıştırıldı ama `.mcp.json`'a dokunmadı. `dotbot` entry'si manuel eklemek gerekti.
+
+**Önerilen fix:** Mevcut `.mcp.json`'ı parse et, core entry'ler (`dotbot`, `context7`, `playwright`) yoksa ekle, varsa dokunma. Diğer entry'leri (kullanıcı eklentileri) olduğu gibi koru.
+
+---
+
+### Bug 14 — Agent'lar repo adını settings/skill dosyalarından tahmin ediyor, framework resolve etmiyor
+
+**Dosyalar:**
+- `workflows/default/systems/runtime/modules/prompt-builder.ps1`
+- `workflows/issue-driven/recipes/prompts/{10,11,12,14,15}-*.md`
+- `workflows/default/recipes/prompts/98-analyse-task.md`
+
+**Sorun:** Agent bir issue fetch etmek için `owner/repo` bilgisine ihtiyaç duyuyor. Eski akış:
+1. Agent `issue_driven.repository` setting'ini okuyor
+2. Boşsa skill dosyalarındaki hardcoded `Clarantis/clarantis` string'ini kullanıyor
+3. O repo yoksa ya da yanlışsa → 404 / auth error
+
+Framework git remote'u zaten biliyor ama agent'a iletmiyordu. Proje-başına-hardcode çirkin çözümdü.
+
+**Fix uygulandı (option 1 — prompt placeholder):**
+
+1. `Build-TaskPrompt`'a yeni yardımcı: `Resolve-RepositoryFromGit` — `git remote get-url origin`'i parse eder (`https://github.com/owner/repo.git` ve `git@github.com:owner/repo.git` formatlarını destekler).
+2. `Build-TaskPrompt`'a `-Repository` parametresi eklendi. Boşsa `Resolve-RepositoryFromGit` fallback'e düşüyor.
+3. `Invoke-WorkflowProcess.ps1` hem execution hem analysis phase'lerde:
+   - `settings.issue_driven.repository` varsa onu geçiriyor (explicit override)
+   - Yoksa boş geçip Build-TaskPrompt'un git remote'dan çözmesine bırakıyor
+4. `{{REPOSITORY}}` placeholder'ı 5 issue-driven execution prompt'u + `98-analyse-task.md`'ye eklendi:
+   ```markdown
+   > **Repository:** `{{REPOSITORY}}` — use this for every GitHub API / MCP call.
+   > Do not guess from settings or skill files; the framework resolves this from git remote.
+   ```
+
+**Kapsam dışı (gelecek iyileştirmeler):**
+- `.claude/commands/*.md` skill dosyalarındaki hardcoded repo referansları projeye özgü — framework dokunmuyor. Proje sahibi kendi skill'lerini `{{REPOSITORY}}` ile güncellemek isterse ayrı bir init-time substitution ekleyebilir.
+- AGENT.md persona dosyaları Build-TaskPrompt'tan geçmiyor, placeholder çalışmaz. Agent persona dosyası içindeki repo referansları execution prompt'unun verdiği `{{REPOSITORY}}` değerini kullanacak şekilde yazılmalı.
+
+---
+
+## Revisit Önceliği
+
+| Bug | Status | Öncelik | Kapsam |
+|---|---|---|---|
+| 9 | Açık | **Kritik** | ClaudeCLI.psm1 + Invoke-WorkflowProcess — worktree isolation tamamen bozuk |
+| 11 | Prompt fix revert, açık | Yüksek | Hem prompt'lar hem framework completion check |
+| 12 | Açık | Yüksek | WorktreeManager + Invoke-WorkflowProcess |
+| 13 | Açık | Orta | init-project.ps1 merge mantığı |
+| 5 | Kısmi fix | Düşük | Gitignore OK, `commit-bot-state.ps1` feature/ prefix kaldı |
+| 10 | Fix uygulandı | — | — |
+| 14 | Fix uygulandı | — | Skill dosyaları kapsam dışı |
+
+**Not:** Bug 9 düzelince Bug 5'in tüm yüzeysel semptomları (main'e chore commit'leri) kaybolur çünkü hepsi `commit-bot-state.ps1`'in yanlış branch'te çalışmasından kaynaklanıyor.

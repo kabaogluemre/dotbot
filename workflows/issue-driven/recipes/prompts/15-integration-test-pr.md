@@ -6,6 +6,8 @@ version: 2.0
 
 # Integration Test PR — Execution Phase
 
+> **Repository:** `{{REPOSITORY}}` — use this for every GitHub API / MCP call in this prompt. Do not guess from settings or skill files; the framework resolves this from git remote.
+
 > The analysis phase already ran `98-analyse-task.md` with the `integration-test-pr-agent` persona. It read the PR diff, located `docs/designs/issue-{n}-{slug}/test-cases.md`, mapped every Test Group to test class/method skeletons, and flagged any additional concurrency/edge cases worth covering. The plan is in `task.analysis.test_plan`. **Your job is the execution phase: implement the tests, run them, push to the PR branch.**
 
 ## Step 1 — Load the Analysis Context

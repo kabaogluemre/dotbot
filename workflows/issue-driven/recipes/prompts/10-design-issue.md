@@ -6,6 +6,8 @@ version: 2.0
 
 # Design Issue — Execution Phase
 
+> **Repository:** `{{REPOSITORY}}` — use this for every GitHub API / MCP call in this prompt. Do not guess from settings or skill files; the framework resolves this from git remote.
+
 > The analysis phase already ran `98-analyse-task.md` with the `design-issue-agent` persona. It fetched the issue, identified gaps via the agent's gap-analysis rules, asked the user for approval via `task_mark_needs_input`, and stored the answers as `questions_resolved` on the task. **Your job is the execution phase: produce the design deliverable.**
 
 ## Pre-conditions (fail fast)

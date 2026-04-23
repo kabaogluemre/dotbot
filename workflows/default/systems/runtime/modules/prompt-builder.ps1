@@ -6,6 +6,26 @@ Prompt building utilities for task execution
 Provides functions for building prompts from templates with variable substitution
 #>
 
+function Resolve-RepositoryFromGit {
+    <#
+    .SYNOPSIS
+    Parse `git remote get-url origin` into `owner/repo`.
+    Supports https://github.com/owner/repo(.git) and git@github.com:owner/repo(.git) forms.
+    Returns empty string if remote is missing or unparseable.
+    #>
+    param([string]$ProjectRoot)
+    if (-not $ProjectRoot -or -not (Test-Path $ProjectRoot)) { return "" }
+    try {
+        $remoteUrl = git -C $ProjectRoot remote get-url origin 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $remoteUrl) { return "" }
+        $remoteUrl = $remoteUrl.Trim()
+        if ($remoteUrl -match '[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$') {
+            return "$($Matches[1])/$($Matches[2])"
+        }
+    } catch {}
+    return ""
+}
+
 function Build-TaskPrompt {
     <#
     .SYNOPSIS
@@ -52,11 +72,21 @@ function Build-TaskPrompt {
         [string]$StandardsList = "No standards files found.",
 
         [Parameter(Mandatory = $false)]
-        [string]$InstanceId = ""
+        [string]$InstanceId = "",
+
+        [Parameter(Mandatory = $false)]
+        [string]$Repository = ""
     )
 
     # Start with template
     $prompt = $PromptTemplate
+
+    # Resolve {{REPOSITORY}} — caller can override; otherwise auto-detect from git remote.
+    # Empty string is rendered if no remote is configured (agent should detect and surface).
+    if (-not $Repository) {
+        $Repository = Resolve-RepositoryFromGit -ProjectRoot $global:DotbotProjectRoot
+    }
+    $prompt = $prompt -replace '\{\{REPOSITORY\}\}', $Repository
 
     # Replace basic task info
     $taskId = if ($Task.id) { "$($Task.id)" } else { "" }

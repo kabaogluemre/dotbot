@@ -6,6 +6,8 @@ version: 2.0
 
 # Implement Issue — Execution Phase
 
+> **Repository:** `{{REPOSITORY}}` — use this for every GitHub API / MCP call in this prompt. Do not guess from settings or skill files; the framework resolves this from git remote.
+
 > The analysis phase already ran `98-analyse-task.md` with the `implement-issue-agent` persona. It read the design doc, studied existing code patterns, identified files to modify, and produced an implementation plan in the analysis object. If the plan had genuine ambiguities, the user answered them via `task_mark_needs_input`. **Your job is the execution phase: write the code, run build, open a PR.**
 
 ## Step 1 — Load the Analysis Context

@@ -6,6 +6,8 @@ version: 2.0
 
 # Unit Test PR — Execution Phase
 
+> **Repository:** `{{REPOSITORY}}` — use this for every GitHub API / MCP call in this prompt. Do not guess from settings or skill files; the framework resolves this from git remote.
+
 > The analysis phase already ran `98-analyse-task.md` with the `unit-test-pr-agent` persona. It read the PR diff, cross-referenced against AC / CLAUDE.md / design doc / test-cases.md, and classified every gap as CRITICAL or HIGH. The gap report is in `task.analysis.gap_report`. **Your job is the execution phase: post the report as a PR comment, then write tests if no CRITICAL gaps.**
 
 ## Step 1 — Load the Analysis Context

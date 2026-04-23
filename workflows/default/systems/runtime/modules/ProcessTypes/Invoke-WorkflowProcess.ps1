@@ -651,6 +651,16 @@ try {
         $analysisPrompt = $analysisPrompt -replace '\{\{SPLIT_THRESHOLD_EFFORT\}\}', $splitThreshold
         $analysisPrompt = $analysisPrompt -replace '\{\{BRANCH_NAME\}\}', 'main'
 
+        # Resolve {{REPOSITORY}} for analysis phase (settings override > git remote fallback)
+        $analysisRepository = ""
+        if ($settings -and $settings.issue_driven -and $settings.issue_driven.repository) {
+            $analysisRepository = [string]$settings.issue_driven.repository
+        }
+        if (-not $analysisRepository) {
+            $analysisRepository = Resolve-RepositoryFromGit -ProjectRoot $projectRoot
+        }
+        $analysisPrompt = $analysisPrompt -replace '\{\{REPOSITORY\}\}', $analysisRepository
+
         # Build resolved questions context for resumed tasks
         $isResumedTask = $task.status -eq 'analysing'
         $resolvedQuestionsContext = ""
@@ -900,6 +910,12 @@ Do NOT implement the task. Your job is research and preparation only.
             else { 'Opus' }
         $executionModelName = Resolve-ProviderModelId -ModelAlias $executionModel
 
+        # Resolve repository: settings override wins, else Build-TaskPrompt falls back to git remote.
+        $repositoryOverride = $null
+        if ($settings -and $settings.issue_driven -and $settings.issue_driven.repository) {
+            $repositoryOverride = [string]$settings.issue_driven.repository
+        }
+
         # Build execution prompt
         $executionPrompt = Build-TaskPrompt `
             -PromptTemplate $executionPromptTemplate `
@@ -908,7 +924,8 @@ Do NOT implement the task. Your job is research and preparation only.
             -ProductMission $productMission `
             -EntityModel $entityModel `
             -StandardsList $standardsList `
-            -InstanceId $instanceId
+            -InstanceId $instanceId `
+            -Repository $repositoryOverride
 
         $branchForPrompt = if ($branchName) { $branchName } else { "main" }
         $executionPrompt = $executionPrompt -replace '\{\{BRANCH_NAME\}\}', $branchForPrompt

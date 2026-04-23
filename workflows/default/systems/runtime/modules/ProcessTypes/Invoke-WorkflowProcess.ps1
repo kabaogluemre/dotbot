@@ -726,6 +726,10 @@ Do NOT implement the task. Your job is research and preparation only.
                 if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
                 if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
+                # Run Claude in the task worktree so file edits land on the task/shared branch,
+                # not on the project root's current branch. Worktree has a hardlinked .mcp.json
+                # so MCP discovery still works.
+                if ($worktreePath) { $streamArgs['WorkingDirectory'] = $worktreePath }
                 Invoke-ProviderStream @streamArgs
                 $exitCode = 0
             } catch {
@@ -984,6 +988,9 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
                 if ($ShowVerbose) { $streamArgs['ShowVerbose'] = $true }
 
                 if ($permissionMode) { $streamArgs['PermissionMode'] = $permissionMode }
+                # Run Claude in the task worktree so file edits land on the task/shared branch,
+                # not on the project root's current branch.
+                if ($worktreePath) { $streamArgs['WorkingDirectory'] = $worktreePath }
                 Invoke-ProviderStream @streamArgs
                 $exitCode = 0
             } catch {

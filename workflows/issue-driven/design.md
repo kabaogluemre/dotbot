@@ -531,11 +531,11 @@ Yeni `dotbot init`'ler `.bot/.gitignore`'da bunları alır. Mevcut projelerde tr
 
 ---
 
-### Bug 9 — Agent'lar worktree yerine project root'ta çalışıyor
+### Bug 9 — Worktree isolation is ineffective — agent file writes land on project root, not the task branch
 
 **Dosya:** `workflows/default/systems/runtime/ClaudeCLI/ClaudeCLI.psm1:577`
 
-**Sorun:** Claude her zaman `$global:DotbotProjectRoot`'ta başlatılıyor — worktree oluşturulsa da. Worktree path Claude process'ine hiç iletilmiyor:
+**Sorun:** Framework her task için bir git worktree oluşturuyor (`../worktrees/{repo}/task-{short-id}-{slug}/` veya shared branch modunda `.../feature-...`) ama Claude CLI process'i her zaman **project root**'ta başlatılıyor:
 
 ```powershell
 # Ensure claude.exe starts in the project root so it discovers .mcp.json
@@ -544,22 +544,65 @@ if ($global:DotbotProjectRoot -and (Test-Path $global:DotbotProjectRoot)) {
 }
 ```
 
-Sonuç:
-- Agent dosyaları ana repo'da düzenliyor (main branch)
-- `git commit` ana repo'nun bulunduğu branch'e gidiyor → main
-- Feature branch (shared_branch modunda `-fe154c` gibi) boş kalıyor
-- `commit-bot-state.ps1` da main'e commit ediyor — Bug 5 bunun alt kümesi
+Worktree path Claude process'ine hiç geçilmiyor. Sonuç: agent'ın yaptığı tüm dosya düzenlemeleri project root'ta (ana repo'nun mevcut branch'inde = main) biriktirilir. Worktree ve task branch boş kalır.
 
-**Deneysel doğrulama (clarantis-dotbot — ilk seferki run):** `feat: extend Analysis Worker...` commit'i feature/issue-1-fe154c yerine main'e gitti. `git branch --contains aa40447` → `main`. (NOT: O repo tamamen reset edilip clean setup'la tekrar denendiğinde bu semptom reprodüks edilmedi — bugünkü main commit'leri sadece gitignore eksikliğindendi, ClaudeCLI cwd değil. Bu bug hâlâ teoride geçerli olabilir ama saha gözlemi revize edildi — confirmed reproduction gerek.)
+#### Reproduction (dotbot main, shared_branch kullanmadan)
 
-**Yorumda sebebi:** MCP discovery için `.mcp.json` proje kökünde. Worktree isolation ile MCP discovery bir arada çözülmemiş.
+1. Temiz bir test repo'da `dotbot init`. Tek satırlık bir `README.md` tracked olsun.
+2. Task aç:
+   ```
+   dotbot task create \
+     --name "Append line to README" \
+     --description "Add the line 'hello from dotbot' at the end of README.md"
+   ```
+3. Autonomous çalıştır, Claude task'ı tamamlasın.
+4. Task çalışırken (ya da `Complete-TaskWorktree` cleanup'ından önce) iki lokasyonu compare et:
+   ```
+   grep "hello from dotbot" ../worktrees/{repo}/task-*/README.md   # worktree
+   grep "hello from dotbot" ./README.md                             # project root
+   ```
+5. Task tamamlandıktan sonra squash-merge commit'ini incele:
+   ```
+   git log main --oneline -3
+   git show HEAD --stat
+   ```
 
-**Önerilen fix:**
-1. `Invoke-ClaudeStream`'a `-WorkingDirectory` parametresi ekle (default: `$global:DotbotProjectRoot`)
-2. `Invoke-WorkflowProcess.ps1` task başına `$worktreePath`'i geç
-3. `.mcp.json`'u worktree'ye junction et (MCP discovery bozulmasın)
+**Expected bug signature:**
+- Adım 4: worktree README'de `hello` YOK, project root README'de `hello` VAR
+- Adım 5: `README.md` main'de değişmiş görünüyor — ama task branch'i üzerinden değil, stash/pop cycle'ı üzerinden geldi (Invoke-WorkflowProcess.ps1'de main repo'nun dirty state'i merge öncesi stash'leniyor, sonrasında pop'lanıyor)
 
-**Risk:** Kapsamlı değişiklik — MCP server'ları worktree'lerde spawn edilirken path resolution test edilmeli.
+#### Saha gözlemleri
+
+- **Vaka 1 (shared_branch, stash/pop yok):** `feat: extend Analysis Worker...` commit'i `feature/issue-1-fe154c` yerine main'e gitti. `git branch --contains aa40447` → `main`. Feature branch sıfır commit ahead of main.
+- **Vaka 2 (shared_branch, clean setup):** Design Issue task "done" oldu, agent GitHub issue'ya "design complete" yorumu attı — ama `docs/designs/cs-1-analysis-worker-orchestration/design.md` worktree'ye (`feature-issue-1-bf1519`) değil, main repo'ya yazıldı. Worktree'nin `docs/designs/` listinde `cs-1-analysis-worker-orchestration/` yok; project root listinde var.
+
+GitHub tarafındaki tool çağrıları (`gh issue comment`, MCP API çağrıları) cwd'den bağımsız olduğu için "başarılı" görünüyor — bu, local dosya yazımı ile GitHub ops arasındaki ayrık davranış bug'ı normal modda maskelemişti.
+
+#### Etki
+
+- **Normal mod (per-task branch):** Claude'un değişiklikleri project root'ta biter → `Complete-TaskWorktree` stash/pop cycle'ı ile main'e düşer → görünürde "çalışıyor" ama task branch'leri fiilen boş. Squash-merge commit'i stash/pop nedeniyle file diff içeriyor gibi görünür, ama task branch history'sinde Claude-origin commit yok. "Task-based isolation" iddiası karşılanmıyor.
+- **Shared branch mod (issue-driven):** Stash/pop yok. Kod main'de kalır, feature branch boş. PR açılır ama içi boş. Kullanıcı görünür şekilde bozuk.
+
+#### Önerilen Fix
+
+1. `Invoke-ClaudeStream` (ClaudeCLI.psm1) → `-WorkingDirectory` parametresi ekle, default `$global:DotbotProjectRoot`
+2. `Invoke-ProviderStream` (ProviderCLI.psm1) → aynı parametreyi passthrough
+3. `Invoke-WorkflowProcess.ps1` → task execution'da (hem analysis hem execution phase) `$worktreePath` geç
+4. `.mcp.json`'u worktree'ye hardlink et (Windows'ta `New-Item -ItemType HardLink`; PS 7 destekler) — MCP discovery cwd'den yapıldığı için bozulmasın
+
+#### Doğrulama (fix sonrası)
+
+Aynı repro adımlarını tekrar et:
+- Adım 4: worktree README'de `hello` VAR olmalı
+- Adım 5: squash-merge commit'i gerçek file diff içermeli
+- Shared branch modda: feature branch'te gerçek commit'ler birikmeli, PR'da diff görünmeli
+
+#### Fix uygulandı
+
+- `Invoke-ClaudeStream` (ClaudeCLI.psm1): `-WorkingDirectory` param eklendi, default `$global:DotbotProjectRoot` (geriye uyumlu)
+- `Invoke-ProviderStream` (ProviderCLI.psm1): `-WorkingDirectory` passthrough
+- `Invoke-WorkflowProcess.ps1`: hem analysis hem execution phase'lerde `$worktreePath` `WorkingDirectory` olarak geçiliyor
+- `WorktreeManager.psm1`: worktree `.mcp.json`'ı tracked değilse project root'tan kopyalıyor (MCP discovery için). Kickstart ve non-worktree akışlar dokunulmadı — onlar hâlâ `$global:DotbotProjectRoot`'ta çalışır.
 
 ---
 
@@ -699,7 +742,7 @@ Framework git remote'u zaten biliyor ama agent'a iletmiyordu. Proje-başına-har
 
 | Bug | Status | Öncelik | Kapsam |
 |---|---|---|---|
-| 9 | Şüpheli | Orta (reprodüksiyon bekliyor) | ClaudeCLI.psm1 + Invoke-WorkflowProcess — ilk vakadaki "main'e feat commit" gitignore fix sonrası reprodüks edilemedi; teoride hâlâ geçerli ama confirmed değil |
+| 9 | Fix uygulandı | — | ClaudeCLI + ProviderCLI + Invoke-WorkflowProcess + WorktreeManager (.mcp.json materialize) — clean setup test bekliyor |
 | 11 | Prompt fix revert, açık | Yüksek | Hem prompt'lar hem framework completion check |
 | 12 | Açık | Yüksek | WorktreeManager + Invoke-WorkflowProcess |
 | 13 | Fix uygulandı | — | init-project.ps1 merge mantığı |

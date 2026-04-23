@@ -298,7 +298,8 @@ function Invoke-ProviderStream {
         [switch]$ShowDebugJson,
         [switch]$ShowVerbose,
         [string]$ProviderName,
-        [string]$PermissionMode
+        [string]$PermissionMode,
+        [string]$WorkingDirectory
     )
 
     # Clear any previous rate limit info
@@ -326,6 +327,7 @@ function Invoke-ProviderStream {
         if ($PersistSession) { $streamArgs['PersistSession'] = $true }
         if ($ShowDebugJson) { $streamArgs['ShowDebugJson'] = $true }
         if ($ShowVerbose)  { $streamArgs['ShowVerbose'] = $true }
+        if ($WorkingDirectory) { $streamArgs['WorkingDirectory'] = $WorkingDirectory }
 
         Invoke-ClaudeStream @streamArgs
 

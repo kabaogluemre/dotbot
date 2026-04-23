@@ -433,7 +433,9 @@ function Invoke-ClaudeStream {
 
         [switch]$ShowVerbose,
 
-        [string[]]$PermissionArgs = @("--dangerously-skip-permissions")
+        [string[]]$PermissionArgs = @("--dangerously-skip-permissions"),
+
+        [string]$WorkingDirectory
     )
 
     # Clear any previous rate limit info
@@ -569,11 +571,15 @@ function Invoke-ClaudeStream {
     $psi.CreateNoWindow = $true
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-    # Ensure claude.exe starts in the project root so it discovers .mcp.json
-    # and starts all configured MCP servers (including dotbot with yaml_write_ticket etc.).
-    # Without this, kickstart launches from the UI inherit the server's CWD which
-    # may not be the project root — causing all mcp__dotbot__* tools to be missing.
-    if ($global:DotbotProjectRoot -and (Test-Path $global:DotbotProjectRoot)) {
+    # Claude's cwd controls where file edits and bash commands resolve relative paths.
+    # - Default: $global:DotbotProjectRoot (ana repo). Needed for MCP discovery (.mcp.json
+    #   is in project root) and for kickstart launches from the UI.
+    # - Task execution: Invoke-WorkflowProcess passes the worktree path so agent edits
+    #   land on the task/shared branch, not on main. Worktree has a hardlinked .mcp.json
+    #   so MCP discovery still works.
+    if ($WorkingDirectory -and (Test-Path $WorkingDirectory)) {
+        $psi.WorkingDirectory = $WorkingDirectory
+    } elseif ($global:DotbotProjectRoot -and (Test-Path $global:DotbotProjectRoot)) {
         $psi.WorkingDirectory = $global:DotbotProjectRoot
     }
     # Marker env var (informational, not functionally critical)

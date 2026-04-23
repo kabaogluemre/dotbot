@@ -45,12 +45,34 @@ if (-not $issueNumber) {
 }
 
 # ── Resolve shared branch name ─────────────────────────────────────────────
+# Read the actual branch from this run's state file — Invoke-WorkflowProcess
+# appends a per-run suffix (e.g. `-fe154c`) so reruns don't collide with an
+# earlier run's branch/PR. Resolving from the manifest template would give the
+# unsuffixed base name and incorrectly match an older PR.
 $activeWf = Get-ActiveWorkflowManifest -BotRoot $BotRoot
 if (-not $activeWf -or -not $activeWf.shared_branch) {
     Write-Status "No shared_branch configured in workflow manifest. Cannot open PR." -Type Error
     exit 1
 }
-$sharedBranch = $activeWf.shared_branch -replace '\{input\.issue_number\}', $issueNumber
+
+$sharedBranch = $null
+$runStateFile = Join-Path $controlDir "workflow-runs\$($activeWf.name).json"
+if (Test-Path $runStateFile) {
+    try {
+        $runState = Get-Content $runStateFile -Raw | ConvertFrom-Json
+        if ($runState -and $runState.shared_branch) {
+            $sharedBranch = [string]$runState.shared_branch
+        }
+    } catch {
+        Write-Status "Could not parse run state file: $runStateFile" -Type Warn
+    }
+}
+
+if (-not $sharedBranch) {
+    Write-Status "No active shared branch recorded in $runStateFile. Cannot open PR." -Type Error
+    exit 1
+}
+
 Write-Status "Opening PR for branch: $sharedBranch (issue #$issueNumber)" -Type Process
 
 # ── Settings: base branch ────────────────────────────────────────────────────

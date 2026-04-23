@@ -12,3 +12,7 @@ state/sessions/runs/
 
 # Development process tracking
 .dev-pids.json
+
+# Ephemeral task state JSONs (rewritten each run — samples/ stay tracked)
+workspace/tasks/**/*.json
+!workspace/tasks/samples/**

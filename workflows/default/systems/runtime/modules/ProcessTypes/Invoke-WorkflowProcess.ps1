@@ -132,9 +132,46 @@ if ($workflowManifest -and $workflowManifest.shared_branch) {
         }
     }
     if ($resolved -and $resolved -notmatch '\{') {
-        $sharedBranch = $resolved
-        Write-Status "Shared branch mode: $sharedBranch" -Type Info
-        Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Shared branch mode active: $sharedBranch"
+        # Append a per-run suffix so reruns on the same issue get a fresh branch/worktree/PR
+        # instead of colliding with a previous run's state. The suffix is persisted
+        # under .control/workflow-runs/{workflow}.json so resumes (which get a new
+        # procId) reuse the same branch; server.ps1 deletes this file on a
+        # `rerun: fresh` launch to force a new suffix on the next run.
+        $runStateKey = if ($Workflow) { $Workflow } else { '_default' }
+        $runStateKeySafe = $runStateKey -replace '[^a-zA-Z0-9._-]', '-'
+        $runStateDir = Join-Path $botRoot ".control\workflow-runs"
+        $runStateFile = Join-Path $runStateDir "$runStateKeySafe.json"
+
+        $existingBranch = $null
+        if (Test-Path $runStateFile) {
+            try {
+                $state = Get-Content $runStateFile -Raw -ErrorAction Stop | ConvertFrom-Json
+                if ($state -and $state.base -eq $resolved -and $state.shared_branch) {
+                    $existingBranch = [string]$state.shared_branch
+                }
+            } catch { Write-BotLog -Level Debug -Message "Stale workflow-run state file ignored" -Exception $_ }
+        }
+
+        if ($existingBranch) {
+            $sharedBranch = $existingBranch
+            Write-Status "Shared branch mode (resumed): $sharedBranch" -Type Info
+            Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Shared branch mode resumed: $sharedBranch"
+        } else {
+            $runSuffix = [guid]::NewGuid().ToString('N').Substring(0, 6)
+            $sharedBranch = "$resolved-$runSuffix"
+            if (-not (Test-Path $runStateDir)) {
+                New-Item -Path $runStateDir -ItemType Directory -Force | Out-Null
+            }
+            $stateOut = [ordered]@{
+                base          = $resolved
+                shared_branch = $sharedBranch
+                created_at    = (Get-Date).ToUniversalTime().ToString("o")
+                proc_id       = $procId
+            }
+            $stateOut | ConvertTo-Json -Depth 3 | Set-Content -Path $runStateFile -Encoding UTF8
+            Write-Status "Shared branch mode: $sharedBranch" -Type Info
+            Write-ProcessActivity -Id $procId -ActivityType "text" -Message "Shared branch mode active: $sharedBranch"
+        }
     } else {
         Write-Status "shared_branch template could not be resolved (prompt file missing or no issue number): $resolved" -Type Warn
     }

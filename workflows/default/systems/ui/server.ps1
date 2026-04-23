@@ -2075,6 +2075,14 @@ $docContext
                                         Clear-WorkflowTasks -TasksBaseDir $tasksBaseDir -WorkflowName $wfName
                                     }
 
+                                    # Clear shared-branch run state so the next launch
+                                    # generates a fresh suffix (new branch/worktree/PR).
+                                    $runStateKeySafe = $wfName -replace '[^a-zA-Z0-9._-]', '-'
+                                    $runStateFile = Join-Path $botRoot ".control\workflow-runs\$runStateKeySafe.json"
+                                    if (Test-Path $runStateFile) {
+                                        Remove-Item -Path $runStateFile -Force -ErrorAction SilentlyContinue
+                                    }
+
                                     # Clean declared task outputs from previous run so stale files
                                     # don't influence the current run's agents
                                     if ($manifest.tasks) {

@@ -28,7 +28,7 @@ Write-Host ""
 Reset-TestResults
 
 # Stale install detection: if repo source is newer than installed copy (or not installed), reinstall
-$needsInstall = -not (Test-Path (Join-Path $dotbotDir "workflows\default"))
+$needsInstall = -not (Test-Path (Join-Path $dotbotDir "core"))
 if (-not $needsInstall) {
     $devNewest = (Get-ChildItem "$repoRoot\workflows","$repoRoot\stacks" -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
     $installNewest = (Get-ChildItem "$dotbotDir/core","$dotbotDir/workflows","$dotbotDir/stacks" -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
@@ -41,7 +41,7 @@ if ($needsInstall) {
 }
 
 # Check prerequisite: dotbot must be installed
-$dotbotInstalled = Test-Path (Join-Path $dotbotDir "workflows\default")
+$dotbotInstalled = Test-Path (Join-Path $dotbotDir "core")
 if (-not $dotbotInstalled) {
     Write-TestResult -Name "Layer 2 prerequisites" -Status Fail -Message "dotbot not installed globally — run install.ps1 first"
     Write-TestSummary -LayerName "Layer 2: Workflow Integration"
@@ -63,16 +63,20 @@ if (-not $yamlModule) {
 Write-Host "  WORKFLOW.YAML AFTER INIT" -ForegroundColor Cyan
 Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
 
-# Default profile init → workflow.yaml should be copied
+# Bare init → start-from-prompt is the canonical workflow. workflow.yaml lives
+# at .bot/workflows/start-from-prompt/, NOT at .bot/ root (PR-5 killed the
+# bot-root manifest).
 $testProjectDefault = New-TestProject
 try {
     Push-Location $testProjectDefault
-    & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") 2>&1 | Out-Null
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts/init-project.ps1") 2>&1 | Out-Null
     Pop-Location
 
     $botDirDefault = Join-Path $testProjectDefault ".bot"
-    $workflowYaml = Join-Path $botDirDefault "workflow.yaml"
-    Assert-PathExists -Name "Default init: workflow.yaml copied to .bot/" -Path $workflowYaml
+    $workflowYaml = Join-Path $botDirDefault "workflows/start-from-prompt/workflow.yaml"
+    Assert-PathExists -Name "Default init: start-from-prompt workflow.yaml present" -Path $workflowYaml
+    Assert-PathNotExists -Name "Default init: no .bot/workflow.yaml at bot root" `
+        -Path (Join-Path $botDirDefault "workflow.yaml")
 
     if (Test-Path $workflowYaml) {
         $raw = Get-Content $workflowYaml -Raw
@@ -85,31 +89,22 @@ try {
     Remove-TestProject -Path $testProjectDefault
 }
 
-# Kickstart-via-jira profile init → root workflow.yaml must remain default
-$kickstartViaJiraProfile = Join-Path $dotbotDir "workflows\start-from-jira"
+# Workflow installs land at .bot/workflows/<wf>/workflow.yaml only — no bot-root
+# manifest to overwrite.
+$kickstartViaJiraProfile = Join-Path $dotbotDir "workflows/start-from-jira"
 if (Test-Path $kickstartViaJiraProfile) {
     $testProjectJira = New-TestProject
     try {
         Push-Location $testProjectJira
-        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") -Workflow start-from-jira 2>&1 | Out-Null
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts/init-project.ps1") -Workflow start-from-jira 2>&1 | Out-Null
         Pop-Location
 
         $botDirJira = Join-Path $testProjectJira ".bot"
 
-        # Root workflow.yaml must still be the default manifest (not overwritten by installed workflow)
-        $rootWorkflowYaml = Join-Path $botDirJira "workflow.yaml"
-        Assert-PathExists -Name "Jira init: root workflow.yaml exists" -Path $rootWorkflowYaml
-        if (Test-Path $rootWorkflowYaml) {
-            $rootRaw = Get-Content $rootWorkflowYaml -Raw
-            Assert-True -Name "Jira init: root workflow.yaml is default (has 'name: default')" `
-                -Condition ($rootRaw -match 'name:\s*default') `
-                -Message "Root workflow.yaml was overwritten by installed workflow"
-            Assert-True -Name "Jira init: root workflow.yaml has form (default feature)" `
-                -Condition ($rootRaw -match 'form:') -Message "No form key — not the default manifest"
-        }
+        Assert-PathNotExists -Name "Jira init: no .bot/workflow.yaml at bot root" `
+            -Path (Join-Path $botDirJira "workflow.yaml")
 
-        # Installed workflow must be in workflows/<name>/ with its own manifest
-        $installedWfYaml = Join-Path $botDirJira "workflows\start-from-jira\workflow.yaml"
+        $installedWfYaml = Join-Path $botDirJira "workflows/start-from-jira/workflow.yaml"
         Assert-PathExists -Name "Jira init: installed workflow.yaml in workflows/start-from-jira/" -Path $installedWfYaml
         if (Test-Path $installedWfYaml) {
             $wfRaw = Get-Content $installedWfYaml -Raw
@@ -125,18 +120,20 @@ if (Test-Path $kickstartViaJiraProfile) {
     Write-TestResult -Name "Jira init workflow.yaml tests" -Status Skip -Message "start-from-jira profile not found"
 }
 
-# Kickstart-via-pr profile init → workflow.yaml
-$kickstartViaPrProfile = Join-Path $dotbotDir "workflows\start-from-pr"
+# start-from-pr install → workflow.yaml at .bot/workflows/start-from-pr/.
+$kickstartViaPrProfile = Join-Path $dotbotDir "workflows/start-from-pr"
 if (Test-Path $kickstartViaPrProfile) {
     $testProjectPr = New-TestProject
     try {
         Push-Location $testProjectPr
-        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") -Workflow start-from-pr 2>&1 | Out-Null
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts/init-project.ps1") -Workflow start-from-pr 2>&1 | Out-Null
         Pop-Location
 
         $botDirPr = Join-Path $testProjectPr ".bot"
-        $prWorkflowYaml = Join-Path $botDirPr "workflow.yaml"
-        Assert-PathExists -Name "PR init: workflow.yaml copied to .bot/" -Path $prWorkflowYaml
+        $prWorkflowYaml = Join-Path $botDirPr "workflows/start-from-pr/workflow.yaml"
+        Assert-PathExists -Name "PR init: start-from-pr workflow.yaml present" -Path $prWorkflowYaml
+        Assert-PathNotExists -Name "PR init: no .bot/workflow.yaml at bot root" `
+            -Path (Join-Path $botDirPr "workflow.yaml")
     } finally {
         Remove-TestProject -Path $testProjectPr
     }
@@ -144,29 +141,21 @@ if (Test-Path $kickstartViaPrProfile) {
     Write-TestResult -Name "PR init workflow.yaml tests" -Status Skip -Message "start-from-pr profile not found"
 }
 
-# Kickstart-via-repo profile init → workflow.yaml
-$kickstartViaRepoProfile = Join-Path $dotbotDir "workflows\start-from-repo"
+# start-from-repo install → workflow.yaml + recipes at workflows/start-from-repo/.
+$kickstartViaRepoProfile = Join-Path $dotbotDir "workflows/start-from-repo"
 if (Test-Path $kickstartViaRepoProfile) {
     $testProjectRepo = New-TestProject
     try {
         Push-Location $testProjectRepo
-        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") -Workflow start-from-repo 2>&1 | Out-Null
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts/init-project.ps1") -Workflow start-from-repo 2>&1 | Out-Null
         Pop-Location
 
         $botDirRepo = Join-Path $testProjectRepo ".bot"
 
-        # Root workflow.yaml must still be the default manifest
-        $rootWorkflowYaml = Join-Path $botDirRepo "workflow.yaml"
-        Assert-PathExists -Name "Repo init: root workflow.yaml exists" -Path $rootWorkflowYaml
-        if (Test-Path $rootWorkflowYaml) {
-            $rootRaw = Get-Content $rootWorkflowYaml -Raw
-            Assert-True -Name "Repo init: root workflow.yaml is default (has 'name: default')" `
-                -Condition ($rootRaw -match 'name:\s*default') `
-                -Message "Root workflow.yaml was overwritten by installed workflow"
-        }
+        Assert-PathNotExists -Name "Repo init: no .bot/workflow.yaml at bot root" `
+            -Path (Join-Path $botDirRepo "workflow.yaml")
 
-        # Installed workflow must be in workflows/<name>/ with its own manifest
-        $installedWfYaml = Join-Path $botDirRepo "workflows\start-from-repo\workflow.yaml"
+        $installedWfYaml = Join-Path $botDirRepo "workflows/start-from-repo/workflow.yaml"
         Assert-PathExists -Name "Repo init: installed workflow.yaml in workflows/start-from-repo/" -Path $installedWfYaml
         if (Test-Path $installedWfYaml) {
             $wfRaw = Get-Content $installedWfYaml -Raw
@@ -176,11 +165,11 @@ if (Test-Path $kickstartViaRepoProfile) {
                 -Condition ($wfRaw -match 'domain:') -Message "No domain key found"
         }
 
-        # Verify recipe files were copied
-        $recipesDir = Join-Path $botDirRepo "recipes\prompts"
-        Assert-PathExists -Name "Repo init: 00-scan-repo-structure.md copied" -Path (Join-Path $recipesDir "00-scan-repo-structure.md")
-        Assert-PathExists -Name "Repo init: 01-analyse-git-history.md copied" -Path (Join-Path $recipesDir "01-analyse-git-history.md")
-        Assert-PathExists -Name "Repo init: 03b-expand-task-group.md copied" -Path (Join-Path $recipesDir "03b-expand-task-group.md")
+        # Workflow-scoped recipes ship under .bot/workflows/start-from-repo/recipes/prompts/.
+        $recipesDir = Join-Path $botDirRepo "workflows/start-from-repo/recipes/prompts"
+        Assert-PathExists -Name "Repo init: 00-scan-repo-structure.md present" -Path (Join-Path $recipesDir "00-scan-repo-structure.md")
+        Assert-PathExists -Name "Repo init: 01-analyse-git-history.md present" -Path (Join-Path $recipesDir "01-analyse-git-history.md")
+        Assert-PathExists -Name "Repo init: 03b-expand-task-group.md present" -Path (Join-Path $recipesDir "03b-expand-task-group.md")
     } finally {
         Remove-TestProject -Path $testProjectRepo
     }
@@ -197,7 +186,7 @@ Write-Host ""
 Write-Host "  GET-ACTIVEWORKFLOWMANIFEST" -ForegroundColor Cyan
 Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
 
-$manifestProj = New-TestProjectFromGolden -Flavor 'default'
+$manifestProj = New-TestProjectFromGolden -Flavor 'start-from-prompt'
 $testProjectManifest = $manifestProj.ProjectRoot
 try {
     $botDirManifest = $manifestProj.BotDir
@@ -205,14 +194,14 @@ try {
     # Dot-source the workflow manifest module from the installed bot
     . (Join-Path $botDirManifest "core/runtime/modules/workflow-manifest.ps1")
 
-    # Resolution from .bot/workflow.yaml (profile-installed)
+    # Resolution from the installed workflow at .bot/workflows/start-from-prompt/
     $manifest = Get-ActiveWorkflowManifest -BotRoot $botDirManifest
     Assert-True -Name "Get-ActiveWorkflowManifest finds manifest" `
         -Condition ($null -ne $manifest) -Message "Manifest not found"
 
     if ($manifest) {
-        Assert-Equal -Name "Resolved manifest name is 'default'" `
-            -Expected "default" -Actual $manifest.name
+        Assert-Equal -Name "Resolved manifest name is 'start-from-prompt'" `
+            -Expected "start-from-prompt" -Actual $manifest.name
         Assert-True -Name "Resolved manifest has tasks" `
             -Condition ($manifest.tasks -and $manifest.tasks.Count -gt 0) -Message "No tasks"
         Assert-True -Name "Resolved manifest has form" `
@@ -230,7 +219,9 @@ try {
         Remove-Item -Path $noManifestDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    # Installed workflow takes precedence over root workflow.yaml
+    # settings.workflow takes precedence over alphabetic-first.
+    # Override settings.workflow to point at a fresh test-workflow we install
+    # on top of the golden's start-from-prompt.
     $wfDir = Join-Path $botDirManifest "workflows\test-workflow"
     New-Item -ItemType Directory -Path $wfDir -Force | Out-Null
     @"
@@ -244,13 +235,20 @@ tasks:
     priority: 1
 "@ | Set-Content (Join-Path $wfDir "workflow.yaml")
 
+    $settingsPath = Join-Path $botDirManifest "settings\settings.default.json"
+    if (Test-Path $settingsPath) {
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+        $settings | Add-Member -NotePropertyName "workflow" -NotePropertyValue "test-workflow" -Force
+        $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath
+    }
+
     $installedManifest = Get-ActiveWorkflowManifest -BotRoot $botDirManifest
-    Assert-True -Name "Installed workflow takes precedence" `
+    Assert-True -Name "settings.workflow selects the active workflow" `
         -Condition ($installedManifest.name -eq "test-workflow") `
         -Message "Expected 'test-workflow', got '$($installedManifest.name)'"
 
-    # Clean up installed workflow to avoid affecting later tests
-    Remove-Item -Path (Join-Path $botDirManifest "workflows") -Recurse -Force -ErrorAction SilentlyContinue
+    # Clean up so later tests start from the unmodified golden.
+    Remove-Item -Path (Join-Path $botDirManifest "workflows\test-workflow") -Recurse -Force -ErrorAction SilentlyContinue
 
 } finally {
     Remove-TestProject -Path $testProjectManifest
@@ -265,7 +263,7 @@ Write-Host ""
 Write-Host "  FORM.MODES CONDITIONS" -ForegroundColor Cyan
 Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
 
-$modesProj = New-TestProjectFromGolden -Flavor 'default'
+$modesProj = New-TestProjectFromGolden -Flavor 'start-from-prompt'
 $testProjectModes = $modesProj.ProjectRoot
 try {
     $botDirModes = $modesProj.BotDir
@@ -279,11 +277,11 @@ try {
     } else {
         $modes = $manifest.form.modes
 
-        # Current default workflow has 2 modes based on product.md:
-        #   new_project: condition !.bot/workspace/product/product.md
-        #   has_docs:    condition .bot/workspace/product/product.md
+        # start-from-prompt has 2 modes based on mission.md:
+        #   new_project: condition !.bot/workspace/product/mission.md
+        #   has_docs:    condition .bot/workspace/product/mission.md
 
-        # State 1: Fresh project — no product.md → new_project mode
+        # State 1: Fresh project — no mission.md → new_project mode
         $matchedMode = $null
         foreach ($mode in $modes) {
             $modeCondition = if ($mode -is [System.Collections.IDictionary]) { $mode['condition'] } else { $mode.condition }
@@ -292,13 +290,13 @@ try {
                 break
             }
         }
-        Assert-Equal -Name "Fresh project without product.md matches new_project mode" `
+        Assert-Equal -Name "Fresh project without mission.md matches new_project mode" `
             -Expected "new_project" -Actual $matchedMode
 
-        # State 2: Create product.md → has_docs should match
+        # State 2: Create mission.md → has_docs should match
         $productDir = Join-Path $botDirModes "workspace\product"
         if (-not (Test-Path $productDir)) { New-Item -ItemType Directory -Path $productDir -Force | Out-Null }
-        "# Product" | Set-Content (Join-Path $productDir "product.md")
+        "# Mission" | Set-Content (Join-Path $productDir "mission.md")
 
         $matchedMode2 = $null
         foreach ($mode in $modes) {
@@ -308,11 +306,11 @@ try {
                 break
             }
         }
-        Assert-Equal -Name "Project with product.md matches has_docs mode" `
+        Assert-Equal -Name "Project with mission.md matches has_docs mode" `
             -Expected "has_docs" -Actual $matchedMode2
 
-        # State 3: Remove product.md again → back to new_project
-        Remove-Item (Join-Path $productDir "product.md") -Force
+        # State 3: Remove mission.md again → back to new_project
+        Remove-Item (Join-Path $productDir "mission.md") -Force
 
         $matchedMode3 = $null
         foreach ($mode in $modes) {
@@ -322,7 +320,7 @@ try {
                 break
             }
         }
-        Assert-Equal -Name "After removing product.md matches new_project mode" `
+        Assert-Equal -Name "After removing mission.md matches new_project mode" `
             -Expected "new_project" -Actual $matchedMode3
     }
 
@@ -747,31 +745,9 @@ if ((Test-Path $wfAddScript) -and (Test-Path $kickstartFromScratchDir)) {
 # DEFAULT WORKFLOW RESOLUTION
 # ═══════════════════════════════════════════════════════════════════
 
-Write-Host ""
-Write-Host "  DEFAULT WORKFLOW RESOLUTION" -ForegroundColor Cyan
-Write-Host "  ──────────────────────────────────────────" -ForegroundColor DarkGray
-
 $serverFile = Join-Path $dotbotDir "core/ui/server.ps1"
 if (Test-Path $serverFile) {
     $serverContent = Get-Content $serverFile -Raw
-
-    Assert-True -Name "Workflow run endpoint has default workflow fallback" `
-        -Condition ($serverContent -match 'if \(-not \(Test-Path \$wfDir\)\)' -and $serverContent -match 'Read-WorkflowManifest -WorkflowDir \$botRoot') `
-        -Message "Missing default workflow fallback in /api/workflows/*/run endpoint"
-
-    Assert-True -Name "Default fallback checks workflow.yaml at bot root" `
-        -Condition ($serverContent -match 'Join-Path \$botRoot "workflow\.yaml"') `
-        -Message "Fallback does not check .bot/workflow.yaml"
-
-    Assert-True -Name "Workflow run endpoint validates workflow.yaml exists" `
-        -Condition ($serverContent -match 'Test-Path \(Join-Path \$wfDir "workflow\.yaml"\)') `
-        -Message "Missing workflow.yaml existence check after resolution"
-
-    Assert-True -Name "Workflow run endpoint does not use Get-CachedManifest for default resolution" `
-        -Condition (-not ($serverContent -match 'Get-CachedManifest.*workflows/\*/run')) `
-        -Message "Default resolution should use inline Read-WorkflowManifest, not Get-CachedManifest"
-} else {
-    Write-TestResult -Name "server.ps1 exists" -Status Skip -Message "Server file not found"
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -891,36 +867,14 @@ if (Test-Path $serverFile) {
         -Condition ($serverContent -match "\`$pendingBucket\s*=\s*if \(\`$tasksByWorkflow\.ContainsKey\('__default__'\)\)") `
         -Message "Synthetic row must read tasks from the __default__ bucket (untagged tasks)"
 
-    Assert-True -Name "Default workflow row does not fold __default__ into its task counts" `
-        -Condition ($serverContent -match "\`$defaultTasks\s*=\s*if \(\`$tasksByWorkflow\.ContainsKey\(\`$defaultName\)\)") `
-        -Message "Default workflow row must source tasks from \$defaultName, not __default__ — folding caused #301"
+    # PR-5: the synthetic 'default' workflow row was removed when workflows/default
+    # was deleted. /api/workflows/installed must not emit a default entry.
+    Assert-True -Name "/api/workflows/installed does not emit synthetic 'default' row" `
+        -Condition (-not ($serverContent -match 'is_default\s*=\s*\$true')) `
+        -Message "Synthetic 'default' row should be gone after PR-5"
 } else {
     Write-TestResult -Name "pending-tasks runner tests" -Status Skip -Message "Server file not found"
 }
-
-# ═══════════════════════════════════════════════════════════════════
-# CLI: DEFAULT WORKFLOW RESOLUTION IN workflow-run.ps1
-# ═══════════════════════════════════════════════════════════════════
-
-Write-Host ""
-Write-Host "  CLI DEFAULT WORKFLOW RESOLUTION" -ForegroundColor Cyan
-Write-Host "  ──────────────────────────────────────────" -ForegroundColor DarkGray
-
-$wfRunScript = Join-Path $dotbotDir "scripts\workflow-run.ps1"
-if (Test-Path $wfRunScript) {
-    $wfRunContent = Get-Content $wfRunScript -Raw
-
-    Assert-True -Name "workflow-run.ps1 has default workflow fallback" `
-        -Condition ($wfRunContent -match 'workflow\.yaml' -and $wfRunContent -match 'Read-WorkflowManifest -WorkflowDir \$BotDir') `
-        -Message "CLI does not fall back to .bot/workflow.yaml for default workflow"
-
-    Assert-True -Name "workflow-run.ps1 checks workflow.yaml existence" `
-        -Condition ($wfRunContent -match 'Test-Path.*workflow\.yaml') `
-        -Message "CLI does not validate workflow.yaml exists"
-} else {
-    Write-TestResult -Name "workflow-run.ps1 CLI tests" -Status Skip -Message "Script not found"
-}
-
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBAL USER SETTINGS (runtime resolution)

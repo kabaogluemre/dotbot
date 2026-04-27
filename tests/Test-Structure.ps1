@@ -109,7 +109,8 @@ try {
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $installScript 2>&1 | Out-Null
 
     Assert-PathExists -Name "~/dotbot directory created" -Path $dotbotDir
-    Assert-PathExists -Name "~/dotbot/workflows/default exists" -Path (Join-Path $dotbotDir "workflows\default")
+    Assert-PathExists -Name "~/dotbot/core exists" -Path (Join-Path $dotbotDir "core")
+    Assert-PathExists -Name "~/dotbot/workflows/start-from-prompt exists" -Path (Join-Path $dotbotDir "workflows\start-from-prompt")
     Assert-PathExists -Name "~/dotbot/scripts exists" -Path (Join-Path $dotbotDir "scripts")
 
     $binDir = Join-Path $dotbotDir "bin"
@@ -156,7 +157,7 @@ Write-Host "  PROJECT INIT" -ForegroundColor Cyan
 Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
 
 # dotbot must be installed for init to work — ensure it's present
-$dotbotInstalled = Test-Path (Join-Path $dotbotDir "workflows\default")
+$dotbotInstalled = Test-Path (Join-Path $dotbotDir "core")
 if (-not $dotbotInstalled) {
     Write-TestResult -Name "Project init tests" -Status Skip -Message "dotbot not installed globally — run install.ps1 first"
 } else {
@@ -268,9 +269,6 @@ if (-not $dotbotInstalled) {
         Assert-PathExists -Name "core/agents exists" -Path (Join-Path $botDir "core/agents")
         Assert-PathExists -Name "core/skills exists" -Path (Join-Path $botDir "core/skills")
         Assert-PathExists -Name "core/prompts exists" -Path (Join-Path $botDir "core/prompts")
-
-        # Workflow-residue recipes directory (still ships with default until PR-5)
-        Assert-PathExists -Name "recipes/prompts exists" -Path (Join-Path $botDir "recipes/prompts")
 
         # Workspace directories
         Assert-PathExists -Name "workspace/sessions exists" -Path (Join-Path $botDir "workspace\sessions")
@@ -432,9 +430,9 @@ if (-not $dotbotInstalled) {
             $botDirCombo = Join-Path $testProjectCombo ".bot"
             Assert-PathExists -Name "Combo: .bot created" -Path $botDirCombo
 
-            # start-from-jira overlay applied (workflow override)
-            Assert-PathExists -Name "Combo: start-from-jira 98-analyse-task.md present" `
-                -Path (Join-Path $botDirCombo "recipes\prompts\98-analyse-task.md")
+            # Framework prompts ship under .bot/core/prompts/ (post-PR-4 layout).
+            Assert-PathExists -Name "Combo: 98-analyse-task.md present in core/" `
+                -Path (Join-Path $botDirCombo "core/prompts/98-analyse-task.md")
 
             # dotnet auto-included via extends (dotnet-blazor extends dotnet)
             $dotnetSkillCheck = Join-Path $botDirCombo "recipes\skills\entity-design\SKILL.md"
@@ -482,23 +480,28 @@ if (-not $dotbotInstalled) {
             $botDir4 = Join-Path $testProject4 ".bot"
             Assert-PathExists -Name "-- start-from-jira: .bot created" -Path $botDir4
 
-            # Key overlay files
-            Assert-PathExists -Name "-- start-from-jira: 98-analyse-task.md (override)" `
-                -Path (Join-Path $botDir4 "recipes\prompts\98-analyse-task.md")
-            Assert-PathExists -Name "-- start-from-jira: 00-interview.md (override)" `
-                -Path (Join-Path $botDir4 "recipes\prompts\00-interview.md")
-            Assert-PathExists -Name "-- start-from-jira: 04-post-research-review.md (new)" `
-                -Path (Join-Path $botDir4 "recipes\prompts\04-post-research-review.md")
-            Assert-PathExists -Name "-- start-from-jira: atlassian.md (new research dir)" `
-                -Path (Join-Path $botDir4 "recipes\research\atlassian.md")
+            # Workflow-scoped prompts live at .bot/workflows/<wf>/recipes/prompts/.
+            $jiraWfPromptsDir = Join-Path $botDir4 "workflows/start-from-jira/recipes/prompts"
+            Assert-PathExists -Name "-- start-from-jira: 00-interview.md present" `
+                -Path (Join-Path $jiraWfPromptsDir "00-interview.md")
+            Assert-PathExists -Name "-- start-from-jira: 04-post-research-review.md present" `
+                -Path (Join-Path $jiraWfPromptsDir "04-post-research-review.md")
+            $jiraWfResearchDir = Join-Path $botDir4 "workflows/start-from-jira/recipes/research"
+            Assert-PathExists -Name "-- start-from-jira: atlassian.md present in workflow research dir" `
+                -Path (Join-Path $jiraWfResearchDir "atlassian.md")
+            # Framework prompt 98-analyse-task.md ships under core/prompts/ for all workflows.
+            Assert-PathExists -Name "-- start-from-jira: 98-analyse-task.md present in core/" `
+                -Path (Join-Path $botDir4 "core/prompts/98-analyse-task.md")
             # Workflow-specific tools install to .bot/workflows/<wf>/tools/<tool>/
             # via the systems/mcp/tools -> tools remap in init-project.ps1.
             Assert-PathExists -Name "-- start-from-jira: repo-clone/script.ps1 (new tool)" `
                 -Path (Join-Path $botDir4 "workflows/start-from-jira/tools/repo-clone/script.ps1")
             Assert-PathExists -Name "-- start-from-jira: settings.default.json (replacement)" `
-                -Path (Join-Path $botDir4 "settings\settings.default.json")
+                -Path (Join-Path $botDir4 "settings/settings.default.json")
 
-            $mrWorkflow99 = Join-Path $botDir4 "recipes\prompts\99-autonomous-task.md"
+            # 99-autonomous-task.md: start-from-jira ships its own workflow-scoped
+            # override that uses the interpolated bot short ID tag.
+            $mrWorkflow99 = Join-Path $botDir4 "workflows/start-from-jira/recipes/prompts/99-autonomous-task.md"
             Assert-FileContains -Name "-- multi-repo: workflow 99 uses interpolated bot short ID tag" `
                 -Path $mrWorkflow99 `
                 -Pattern "\[bot:\{\{INSTANCE_ID_SHORT\}\}\]"
@@ -638,26 +641,27 @@ if (-not $dotbotInstalled) {
             Assert-PathExists -Name "-- start-from-pr: .bot created" -Path $botDirPr
             Assert-PathExists -Name "-- start-from-pr: .env.local created" -Path (Join-Path $testProjectPr ".env.local")
 
-            # Key overlay files
+            # Workflow-scoped prompts live at .bot/workflows/<wf>/recipes/prompts/.
+            $prWfPromptsDir = Join-Path $botDirPr "workflows/start-from-pr/recipes/prompts"
             Assert-PathExists -Name "-- start-from-pr: 00-interview.md present" `
-                -Path (Join-Path $botDirPr "recipes\prompts\00-interview.md")
+                -Path (Join-Path $prWfPromptsDir "00-interview.md")
             Assert-PathExists -Name "-- start-from-pr: 01-plan-product.md present" `
-                -Path (Join-Path $botDirPr "recipes\prompts\01-plan-product.md")
+                -Path (Join-Path $prWfPromptsDir "01-plan-product.md")
             Assert-PathExists -Name "-- start-from-pr: 02-plan-tasks.md present" `
-                -Path (Join-Path $botDirPr "recipes\prompts\02-plan-tasks.md")
+                -Path (Join-Path $prWfPromptsDir "02-plan-tasks.md")
             Assert-PathExists -Name "-- start-from-pr: pr-context/script.ps1 present" `
                 -Path (Join-Path $botDirPr "workflows/start-from-pr/tools/pr-context/script.ps1")
             Assert-PathExists -Name "-- start-from-pr: pr-context/metadata.yaml present" `
                 -Path (Join-Path $botDirPr "workflows/start-from-pr/tools/pr-context/metadata.yaml")
             Assert-PathExists -Name "-- start-from-pr: settings.default.json present" `
-                -Path (Join-Path $botDirPr "settings\settings.default.json")
+                -Path (Join-Path $botDirPr "settings/settings.default.json")
 
             # on-install.ps1 should NOT be copied to .bot/
             Assert-PathNotExists -Name "-- start-from-pr: on-install.ps1 not copied" `
                 -Path (Join-Path $botDirPr "on-install.ps1")
 
             # Settings validation
-            $settingsPathPr = Join-Path $botDirPr "settings\settings.default.json"
+            $settingsPathPr = Join-Path $botDirPr "settings/settings.default.json"
             Assert-ValidJson -Name "-- start-from-pr: settings is valid JSON" -Path $settingsPathPr
             if (Test-Path $settingsPathPr) {
                 $settingsPr = Get-Content $settingsPathPr -Raw | ConvertFrom-Json
@@ -669,9 +673,10 @@ if (-not $dotbotInstalled) {
                     -Condition ($settingsPr.task_categories.Count -eq 4) `
                     -Message "Expected 4 categories, got $($settingsPr.task_categories.Count)"
 
-                # Workflow tasks/phases are now defined in workflow.yaml, not settings
+                # After PR-5 there is no .bot/workflow.yaml at the bot root; workflow
+                # manifests live only under .bot/workflows/<wf>/.
                 Assert-PathExists -Name "-- start-from-pr: workflow.yaml present" `
-                    -Path (Join-Path $botDirPr "workflow.yaml")
+                    -Path (Join-Path $botDirPr "workflows/start-from-pr/workflow.yaml")
             }
 
             # All .ps1 files in the profile source are valid PowerShell
@@ -749,10 +754,10 @@ Write-Host "  ──────────────────────
 $workflowsSourceDir = Join-Path $repoRoot "workflows"
 $stacksSourceDir = Join-Path $repoRoot "stacks"
 
-# Scan non-default workflows and all stacks for manifest.yaml
+# Scan all workflows and stacks for manifest.yaml
 $manifestDirs = @()
 if (Test-Path $workflowsSourceDir) {
-    $manifestDirs += Get-ChildItem -Path $workflowsSourceDir -Directory | Where-Object { $_.Name -ne "default" }
+    $manifestDirs += Get-ChildItem -Path $workflowsSourceDir -Directory
 }
 if (Test-Path $stacksSourceDir) {
     $manifestDirs += Get-ChildItem -Path $stacksSourceDir -Directory
@@ -843,7 +848,7 @@ Write-Host ""
 Write-Host "  PROVIDER CONFIGS" -ForegroundColor Cyan
 Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
 
-$providersDir = Join-Path $repoRoot "workflows\default\settings\providers"
+$providersDir = Join-Path $repoRoot "core\settings\providers"
 
 foreach ($providerName in @("claude", "codex", "gemini")) {
     $providerFile = Join-Path $providersDir "$providerName.json"
@@ -924,7 +929,7 @@ foreach ($providerName in @("claude", "codex", "gemini")) {
 }
 
 # Settings has provider field
-$settingsFile = Join-Path $repoRoot "workflows\default\settings\settings.default.json"
+$settingsFile = Join-Path $repoRoot "core\settings\settings.default.json"
 if (Test-Path $settingsFile) {
     $settingsData = Get-Content $settingsFile -Raw | ConvertFrom-Json
     Assert-True -Name "settings.default.json has 'provider' field" `
@@ -959,7 +964,7 @@ Write-Host ""
 Write-Host "  WORKSPACE INSTANCE ID" -ForegroundColor Cyan
 Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
 
-$defaultSettingsPath = Join-Path $repoRoot "workflows\default\settings\settings.default.json"
+$defaultSettingsPath = Join-Path $repoRoot "core\settings\settings.default.json"
 $kickstartViaJiraSettingsPath = Join-Path $repoRoot "workflows\start-from-jira\settings\settings.default.json"
 $kickstartViaPrSettingsPath = Join-Path $repoRoot "workflows\start-from-pr\settings\settings.default.json"
 $stateBuilderPath = Join-Path $repoRoot "core/ui/modules/StateBuilder.psm1"
@@ -998,11 +1003,11 @@ if ($analyzerAvailable) {
     $settingsPath = Join-Path $repoRoot "PSScriptAnalyzerSettings.psd1"
     $scriptsToCheck = @(
         (Join-Path $repoRoot "install.ps1"),
-        (Join-Path $repoRoot "workflows" "default" "systems" "runtime" "launch-process.ps1"),
-        (Join-Path $repoRoot "workflows" "default" "systems" "ui" "server.ps1"),
-        (Join-Path $repoRoot "workflows" "default" "systems" "runtime" "modules" "ProcessRegistry.psm1"),
-        (Join-Path $repoRoot "workflows" "default" "systems" "runtime" "modules" "ProcessTypes" "Invoke-PromptProcess.ps1"),
-        (Join-Path $repoRoot "workflows" "default" "systems" "runtime" "modules" "ProcessTypes" "Invoke-WorkflowProcess.ps1")
+        (Join-Path $repoRoot "core" "runtime" "launch-process.ps1"),
+        (Join-Path $repoRoot "core" "ui" "server.ps1"),
+        (Join-Path $repoRoot "core" "runtime" "modules" "ProcessRegistry.psm1"),
+        (Join-Path $repoRoot "core" "runtime" "modules" "ProcessTypes" "Invoke-PromptProcess.ps1"),
+        (Join-Path $repoRoot "core" "runtime" "modules" "ProcessTypes" "Invoke-WorkflowProcess.ps1")
     )
     foreach ($scriptFile in $scriptsToCheck) {
         $scriptName = [System.IO.Path]::GetRelativePath($repoRoot, $scriptFile) -replace '\\', '/'
@@ -1031,8 +1036,8 @@ Write-Host ""
 Write-Host "  LOGGING HYGIENE" -ForegroundColor Cyan
 Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
 
-$workflowsDefault = Join-Path $repoRoot "workflows\default"
-if (Test-Path $workflowsDefault) {
+$coreDir = Join-Path $repoRoot "core"
+if (Test-Path $coreDir) {
     $forbiddenPatterns = @(
         @{ Pattern = '\bWrite-Host\b';    Name = 'Write-Host' }
         @{ Pattern = '\bWrite-Verbose\b'; Name = 'Write-Verbose' }
@@ -1044,8 +1049,8 @@ if (Test-Path $workflowsDefault) {
     # Files that implement logging/theming infrastructure and legitimately use raw output
     # Use forward slashes for cross-platform path matching
     $allowlist = @(
-        'core/runtime/modules/DotBotLog.psm1',
-        'core/runtime/modules/DotBotTheme.psm1'
+        'runtime/modules/DotBotLog.psm1',
+        'runtime/modules/DotBotTheme.psm1'
     )
 
     # Patterns for files excluded from enforcement (user-facing scripts, manual test scripts)
@@ -1056,9 +1061,9 @@ if (Test-Path $workflowsDefault) {
     )
 
     $violations = @()
-    Get-ChildItem -Path $workflowsDefault -Recurse -Include *.ps1, *.psm1 | ForEach-Object {
+    Get-ChildItem -Path $coreDir -Recurse -Include *.ps1, *.psm1 | ForEach-Object {
         # Normalize to forward slashes for cross-platform matching
-        $relativePath = $_.FullName.Substring($workflowsDefault.Length + 1).Replace('\', '/')
+        $relativePath = $_.FullName.Substring($coreDir.Length + 1).Replace('\', '/')
         if ($relativePath -in $allowlist) { return }
         # Check exclude patterns
         $excluded = $false
@@ -1080,15 +1085,15 @@ if (Test-Path $workflowsDefault) {
     }
 
     if ($violations.Count -eq 0) {
-        Write-TestResult -Name "No raw Write-* calls in workflows/default (except allowlist)" -Status Pass
+        Write-TestResult -Name "No raw Write-* calls in core/ (except allowlist)" -Status Pass
     } else {
         $sample = ($violations | Select-Object -First 15) -join "`n  "
         $extra = if ($violations.Count -gt 15) { "`n  ... and $($violations.Count - 15) more" } else { "" }
-        Write-TestResult -Name "No raw Write-* calls in workflows/default (except allowlist)" -Status Fail `
+        Write-TestResult -Name "No raw Write-* calls in core/ (except allowlist)" -Status Fail `
             -Message "Found $($violations.Count) violation(s):`n  $sample$extra"
     }
 } else {
-    Write-TestResult -Name "Logging hygiene" -Status Skip -Message "workflows/default not found"
+    Write-TestResult -Name "Logging hygiene" -Status Skip -Message "core/ not found"
 }
 
 Write-Host ""
@@ -1100,7 +1105,7 @@ Write-Host ""
 Write-Host "  CROSS-PLATFORM HYGIENE" -ForegroundColor Cyan
 Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
 
-if (Test-Path $workflowsDefault) {
+if (Test-Path $coreDir) {
     # Windows-only patterns that must not appear outside of $IsWindows guards
     $windowsOnlyPatterns = @(
         @{ Pattern = '\$env:USERPROFILE\b';                          Name = '$env:USERPROFILE (use $HOME)' }
@@ -1117,8 +1122,8 @@ if (Test-Path $workflowsDefault) {
     )
 
     $cpViolations = @()
-    Get-ChildItem -Path $workflowsDefault -Recurse -Include *.ps1, *.psm1 | ForEach-Object {
-        $relativePath = $_.FullName.Substring($workflowsDefault.Length + 1).Replace('\', '/')
+    Get-ChildItem -Path $coreDir -Recurse -Include *.ps1, *.psm1 | ForEach-Object {
+        $relativePath = $_.FullName.Substring($coreDir.Length + 1).Replace('\', '/')
         $lines = Get-Content $_.FullName
         $inIsWindowsBlock = $false
         $isWindowsBlockDepth = 0
@@ -1154,15 +1159,15 @@ if (Test-Path $workflowsDefault) {
     }
 
     if ($cpViolations.Count -eq 0) {
-        Write-TestResult -Name "No Windows-only APIs in workflows/default (outside platform guards)" -Status Pass
+        Write-TestResult -Name "No Windows-only APIs in core/ (outside platform guards)" -Status Pass
     } else {
         $sample = ($cpViolations | Select-Object -First 15) -join "`n  "
         $extra = if ($cpViolations.Count -gt 15) { "`n  ... and $($cpViolations.Count - 15) more" } else { "" }
-        Write-TestResult -Name "No Windows-only APIs in workflows/default (outside platform guards)" -Status Fail `
+        Write-TestResult -Name "No Windows-only APIs in core/ (outside platform guards)" -Status Fail `
             -Message "Found $($cpViolations.Count) violation(s):`n  $sample$extra"
     }
 } else {
-    Write-TestResult -Name "Cross-platform hygiene" -Status Skip -Message "workflows/default not found"
+    Write-TestResult -Name "Cross-platform hygiene" -Status Skip -Message "core/ not found"
 }
 
 Write-Host ""
@@ -1470,35 +1475,34 @@ if (Test-Path $frameworkIntegrityModule) {
         -Path $frameworkIntegrityModule -Pattern 'Invoke-FrameworkIntegrityGate'
 }
 
-# Agent-instruction file marker block written by workflows/default/init.ps1
-$workflowInit = Join-Path $repoRoot "workflows" "default" "init.ps1"
+# Agent-instruction file marker block written by core/init.ps1
+$workflowInit = Join-Path $repoRoot "core" "init.ps1"
 if (Test-Path $workflowInit) {
-    Assert-FileContains -Name "workflows/default/init.ps1 writes framework-protection marker" `
+    Assert-FileContains -Name "core/init.ps1 writes framework-protection marker" `
         -Path $workflowInit -Pattern 'dotbot:framework-protection'
-    Assert-FileContains -Name "workflows/default/init.ps1 covers CLAUDE.md" `
+    Assert-FileContains -Name "core/init.ps1 covers CLAUDE.md" `
         -Path $workflowInit -Pattern 'CLAUDE\.md'
-    Assert-FileContains -Name "workflows/default/init.ps1 covers AGENTS.md (Codex)" `
+    Assert-FileContains -Name "core/init.ps1 covers AGENTS.md (Codex)" `
         -Path $workflowInit -Pattern 'AGENTS\.md'
-    Assert-FileContains -Name "workflows/default/init.ps1 covers GEMINI.md (Gemini)" `
+    Assert-FileContains -Name "core/init.ps1 covers GEMINI.md (Gemini)" `
         -Path $workflowInit -Pattern 'GEMINI\.md'
 }
 
 # DO NOT MODIFY headers on key framework files
 $headerBannerPattern = 'FRAMEWORK FILE.*DO NOT MODIFY'
 $bannerTargets = @(
-    'workflows/default/go.ps1',
-    'workflows/default/init.ps1',
+    'core/go.ps1',
+    'core/init.ps1',
     'core/mcp/dotbot-mcp.ps1',
     'core/hooks/verify/00-privacy-scan.ps1',
     'core/hooks/verify/01-git-clean.ps1',
     'core/hooks/verify/02-git-pushed.ps1',
     'core/hooks/verify/03-check-md-refs.ps1',
     'core/hooks/verify/04-framework-integrity.ps1',
-    'workflows/default/hooks/scripts/commit-bot-state.ps1',
-    'workflows/default/hooks/scripts/steering.ps1',
-    'workflows/default/hooks/dev/Start-Dev.ps1',
-    'workflows/default/hooks/dev/Stop-Dev.ps1',
-    'workflows/default/workflow.yaml',
+    'core/hooks/scripts/commit-bot-state.ps1',
+    'core/hooks/scripts/steering.ps1',
+    'core/hooks/dev/Start-Dev.ps1',
+    'core/hooks/dev/Stop-Dev.ps1',
     'core/agents/implementer/AGENT.md',
     'core/agents/planner/AGENT.md',
     'core/agents/reviewer/AGENT.md',

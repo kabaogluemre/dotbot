@@ -379,6 +379,76 @@ if (-not $dotbotInstalled) {
     } finally {
         Remove-TestProject -Path $testProject
     }
+
+    # --- Init merges into pre-existing .mcp.json (regression for #315) ---
+    Write-Host ""
+    Write-Host "  INIT MCP MERGE (#315)" -ForegroundColor Cyan
+    Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
+
+    # Case 1: pre-existing user entry must be preserved AND core entries added.
+    $mergeProject = New-TestProject -Prefix "dotbot-test-mcpmerge"
+    try {
+        $mergeMcpJson = Join-Path $mergeProject ".mcp.json"
+        '{ "mcpServers": { "myserver": { "command": "echo", "args": ["hi"] } } }' |
+            Set-Content -Path $mergeMcpJson -Encoding UTF8
+
+        Push-Location $mergeProject
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") 2>&1 | Out-Null
+        Pop-Location
+
+        $mcpAfter = Get-Content $mergeMcpJson -Raw | ConvertFrom-Json
+        Assert-True -Name "merge: user 'myserver' entry preserved" `
+            -Condition ($null -ne $mcpAfter.mcpServers.myserver) `
+            -Message "User-added 'myserver' entry was lost during merge"
+        Assert-True -Name "merge: core 'dotbot' entry added" `
+            -Condition ($null -ne $mcpAfter.mcpServers.dotbot) `
+            -Message "dotbot core entry not merged into existing .mcp.json"
+        Assert-True -Name "merge: core 'context7' entry added" `
+            -Condition ($null -ne $mcpAfter.mcpServers.context7) `
+            -Message "context7 core entry not merged into existing .mcp.json"
+        Assert-True -Name "merge: core 'playwright' entry added" `
+            -Condition ($null -ne $mcpAfter.mcpServers.playwright) `
+            -Message "playwright core entry not merged into existing .mcp.json"
+    } finally {
+        Remove-TestProject -Path $mergeProject
+    }
+
+    # Case 2: -Force refreshes a tampered core entry to canonical form.
+    $forceProject = New-TestProject -Prefix "dotbot-test-mcpforce"
+    try {
+        $forceMcpJson = Join-Path $forceProject ".mcp.json"
+        '{ "mcpServers": { "dotbot": { "command": "WRONG", "args": [] } } }' |
+            Set-Content -Path $forceMcpJson -Encoding UTF8
+
+        Push-Location $forceProject
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") -Force 2>&1 | Out-Null
+        Pop-Location
+
+        $mcpForced = Get-Content $forceMcpJson -Raw | ConvertFrom-Json
+        Assert-Equal -Name "merge -Force: refreshes tampered core dotbot.command" `
+            -Expected "pwsh" `
+            -Actual "$($mcpForced.mcpServers.dotbot.command)"
+    } finally {
+        Remove-TestProject -Path $forceProject
+    }
+
+    # Case 3: invalid JSON fails loudly instead of silently overwriting/skipping.
+    $invalidProject = New-TestProject -Prefix "dotbot-test-mcpinvalid"
+    try {
+        $invalidMcpJson = Join-Path $invalidProject ".mcp.json"
+        "not valid json {" | Set-Content -Path $invalidMcpJson -Encoding UTF8
+
+        Push-Location $invalidProject
+        $invalidOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") 2>&1 | Out-String
+        $invalidExit = $LASTEXITCODE
+        Pop-Location
+
+        Assert-True -Name "merge: invalid JSON fails loudly (non-zero exit or error in output)" `
+            -Condition (($invalidExit -ne 0) -or ($invalidOutput -match '\.mcp\.json')) `
+            -Message "Expected init to fail with .mcp.json error, got exit=$invalidExit, output: $invalidOutput"
+    } finally {
+        Remove-TestProject -Path $invalidProject
+    }
     }
 
     # --- Init with -Stack dotnet ---

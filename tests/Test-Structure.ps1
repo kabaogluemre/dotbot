@@ -432,7 +432,32 @@ if (-not $dotbotInstalled) {
         Remove-TestProject -Path $forceProject
     }
 
-    # Case 3: invalid JSON fails loudly instead of silently overwriting/skipping.
+    # Case 3: non-mcpServers top-level keys are preserved verbatim.
+    $extraKeyProject = New-TestProject -Prefix "dotbot-test-mcpextra"
+    try {
+        $extraMcpJson = Join-Path $extraKeyProject ".mcp.json"
+        '{ "version": "1.0", "inputs": [{ "id": "x", "type": "promptString" }], "mcpServers": { "myserver": { "command": "echo" } } }' |
+            Set-Content -Path $extraMcpJson -Encoding UTF8
+
+        Push-Location $extraKeyProject
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") 2>&1 | Out-Null
+        Pop-Location
+
+        $mcpExtra = Get-Content $extraMcpJson -Raw | ConvertFrom-Json
+        Assert-Equal -Name "merge: top-level 'version' key preserved" `
+            -Expected "1.0" `
+            -Actual "$($mcpExtra.version)"
+        Assert-True -Name "merge: top-level 'inputs' key preserved" `
+            -Condition ($null -ne $mcpExtra.inputs -and $mcpExtra.inputs.Count -eq 1) `
+            -Message "Top-level 'inputs' array was lost during merge"
+        Assert-True -Name "merge: core entries still added alongside extra keys" `
+            -Condition ($null -ne $mcpExtra.mcpServers.dotbot) `
+            -Message "dotbot core entry not merged when extra top-level keys present"
+    } finally {
+        Remove-TestProject -Path $extraKeyProject
+    }
+
+    # Case 4: invalid JSON fails loudly instead of silently overwriting/skipping.
     $invalidProject = New-TestProject -Prefix "dotbot-test-mcpinvalid"
     try {
         $invalidMcpJson = Join-Path $invalidProject ".mcp.json"
@@ -443,9 +468,9 @@ if (-not $dotbotInstalled) {
         $invalidExit = $LASTEXITCODE
         Pop-Location
 
-        Assert-True -Name "merge: invalid JSON fails loudly (non-zero exit or error in output)" `
-            -Condition (($invalidExit -ne 0) -or ($invalidOutput -match '\.mcp\.json')) `
-            -Message "Expected init to fail with .mcp.json error, got exit=$invalidExit, output: $invalidOutput"
+        Assert-True -Name "merge: invalid JSON fails loudly (non-zero exit AND specific error)" `
+            -Condition (($invalidExit -ne 0) -and ($invalidOutput -match '(?i)(not valid json|invalid json|convertfrom-json|unexpected character)')) `
+            -Message "Expected init to fail with non-zero exit and invalid-JSON error for .mcp.json, got exit=$invalidExit, output: $invalidOutput"
     } finally {
         Remove-TestProject -Path $invalidProject
     }

@@ -960,8 +960,14 @@ if (Test-Path $mcpJsonPath) {
         }
     }
 
-    $mcpConfig = @{ mcpServers = $mergedServers }
-    $mcpConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $mcpJsonPath -Encoding UTF8
+    # Preserve any non-mcpServers top-level keys (e.g. tool-specific settings)
+    # by mutating $existing in place rather than rebuilding from scratch.
+    if ($existing.PSObject.Properties['mcpServers']) {
+        $existing.mcpServers = $mergedServers
+    } else {
+        $existing | Add-Member -NotePropertyName 'mcpServers' -NotePropertyValue $mergedServers -Force
+    }
+    $existing | ConvertTo-Json -Depth 10 | Set-Content -Path $mcpJsonPath -Encoding UTF8
     Write-Success "Merged .mcp.json"
 } else {
     Write-Status "Creating .mcp.json (dotbot + Context7 + Playwright)"

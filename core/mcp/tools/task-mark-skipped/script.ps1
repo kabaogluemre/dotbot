@@ -1,4 +1,39 @@
 Import-Module (Join-Path $global:DotbotProjectRoot ".bot/core/mcp/modules/TaskStore.psm1") -Force
+# Single source of truth for skip-reason classification (issue #318) lives in
+# TaskIndexCache.psm1. Do NOT inline the reason lists here — keep this file
+# free of duplication so adding/removing a reason only touches one place.
+if (-not (Get-Module TaskIndexCache)) {
+    Import-Module (Join-Path $global:DotbotProjectRoot ".bot/core/mcp/modules/TaskIndexCache.psm1") -DisableNameChecking
+}
+
+function Test-IsIntentionalSkipReason {
+    param([string]$Reason)
+    return $Reason -in (Get-IntentionalSkipReasons)
+}
+
+function Test-IsFrameworkSkipReason {
+    param([string]$Reason)
+    return $Reason -in (Get-FrameworkSkipReasons)
+}
+
+function Get-EffectiveSkipReason {
+    <#
+    .SYNOPSIS
+    Resolve the canonical skip reason for a task. Latest skip_history[].reason
+    wins; falls back to the top-level skip_reason field. Returns $null if
+    neither is present.
+    #>
+    param([object]$TaskContent)
+    if ($TaskContent.skip_history) {
+        $entries = @($TaskContent.skip_history)
+        if ($entries.Count -gt 0) {
+            $latest = $entries[-1]
+            if ($latest.reason) { return [string]$latest.reason }
+        }
+    }
+    if ($TaskContent.skip_reason) { return [string]$TaskContent.skip_reason }
+    return $null
+}
 
 function Invoke-TaskMarkSkipped {
     param(
@@ -7,11 +42,12 @@ function Invoke-TaskMarkSkipped {
 
     $taskId = $Arguments['task_id']
     $skipReason = $Arguments['skip_reason']
+    $skipDetail = $Arguments['skip_detail']
 
     if (-not $taskId) { throw "Task ID is required" }
     if (-not $skipReason) { throw "Skip reason is required" }
 
-    $validReasons = @('non-recoverable', 'max-retries')
+    $validReasons = (Get-IntentionalSkipReasons) + (Get-FrameworkSkipReasons)
     if ($skipReason -notin $validReasons) {
         throw "Invalid skip reason. Must be one of: $($validReasons -join ', ')"
     }
@@ -33,11 +69,12 @@ function Invoke-TaskMarkSkipped {
         }
     }
 
-    $skipEntry = @{
+    $skipEntry = [ordered]@{
         skipped_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
         reason     = $skipReason
     }
-    $skipHistory += $skipEntry
+    if ($skipDetail) { $skipEntry.detail = $skipDetail }
+    $skipHistory += [pscustomobject]$skipEntry
 
     $allStatuses = @('todo', 'analysing', 'needs-input', 'analysed', 'in-progress', 'done', 'skipped', 'split', 'cancelled')
 
@@ -64,8 +101,7 @@ function Invoke-TaskMarkSkipped {
         skip_reason  = $skipReason
         skip_count   = $skipHistory.Count
         skip_history = $skipHistory
+        intentional  = (Test-IsIntentionalSkipReason -Reason $skipReason)
         file_path    = $result.file_path
     }
 }
-
-

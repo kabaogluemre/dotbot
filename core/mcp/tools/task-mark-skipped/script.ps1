@@ -11,30 +11,6 @@ function Test-IsIntentionalSkipReason {
     return $Reason -in (Get-IntentionalSkipReasons)
 }
 
-function Test-IsFrameworkSkipReason {
-    param([string]$Reason)
-    return $Reason -in (Get-FrameworkSkipReasons)
-}
-
-function Get-EffectiveSkipReason {
-    <#
-    .SYNOPSIS
-    Resolve the canonical skip reason for a task. Latest skip_history[].reason
-    wins; falls back to the top-level skip_reason field. Returns $null if
-    neither is present.
-    #>
-    param([object]$TaskContent)
-    if ($TaskContent.skip_history) {
-        $entries = @($TaskContent.skip_history)
-        if ($entries.Count -gt 0) {
-            $latest = $entries[-1]
-            if ($latest.reason) { return [string]$latest.reason }
-        }
-    }
-    if ($TaskContent.skip_reason) { return [string]$TaskContent.skip_reason }
-    return $null
-}
-
 function Invoke-TaskMarkSkipped {
     param(
         [hashtable]$Arguments

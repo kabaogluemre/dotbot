@@ -871,6 +871,9 @@ try {
 
     Initialize-TaskIndex -TasksBaseDir $tasksBaseDir
     $resultFramework = Test-TaskCompletion -TaskId "tc-framework"
+    Assert-True -Name "Framework-error skip is reported completed=true (issue #318)" `
+        -Condition ($resultFramework.completed -eq $true) `
+        -Message "Expected completed=true, got $($resultFramework.completed)"
     Assert-Equal -Name "Framework-error skip reports method=TerminalState" `
         -Expected "TerminalState" -Actual $resultFramework.method
     Assert-Equal -Name "Framework-error skip reports terminal_state=skipped" `

@@ -871,9 +871,9 @@ function Get-DeadlockedTasks {
     $blockerNameMap = @{}
 
     foreach ($t in $index.Skipped.Values) {
-        if (-not $t.file_path -or -not (Test-Path $t.file_path)) { continue }
+        if (-not $t.file_path -or -not (Test-Path -LiteralPath $t.file_path)) { continue }
         try {
-            $content = Get-Content -Path $t.file_path -Raw | ConvertFrom-Json
+            $content = Get-Content -LiteralPath $t.file_path -Raw | ConvertFrom-Json
         } catch { continue }
 
         if (-not (Test-IsFrameworkErrorSkip -TaskContent $content)) { continue }
@@ -937,10 +937,14 @@ function Get-TaskTerminalState {
     Returns the terminal state name for a task, or $null if not terminal.
 
     .DESCRIPTION
-    Terminal states are done, skipped, failed, cancelled, split. Returns the
-    state name as a string when the task lives in one of those buckets; $null
+    Terminal states are done, skipped, cancelled, split. Returns the state
+    name as a string when the task lives in one of those buckets; $null
     otherwise. Used by Test-TaskCompletion so the runner stops the retry loop
     on any terminal outcome (issue #318).
+
+    Note: there is no separate failed/ directory. Framework-error skips live
+    in skipped/ and are discriminated via skip_history[].reason — see
+    Test-IsFrameworkErrorSkip.
     #>
     param(
         [Parameter(Mandatory = $true)]

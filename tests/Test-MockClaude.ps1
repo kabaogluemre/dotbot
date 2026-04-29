@@ -202,14 +202,29 @@ try {
         $tempCwd = Join-Path ([System.IO.Path]::GetTempPath()) "dotbot-cwd-$([System.Guid]::NewGuid().ToString('N').Substring(0,8))"
         New-Item -Path $tempCwd -ItemType Directory -Force | Out-Null
 
-        # Resolve to canonical form (Windows temp paths can include short-name segments
-        # like RUNNER~1 vs runneradmin; the mock captures (Get-Location).Path which is
-        # already long-form, so we compare against the long-form too).
-        $expectedCwd = (Resolve-Path -LiteralPath $tempCwd).Path
+        # Canonicalize to match what the kernel reports as cwd inside the spawned process.
+        # - Windows: Resolve-Path expands short-name segments (RUNNER~1 -> runneradmin).
+        # - macOS:   /var, /tmp, /etc are symlinks to /private/*. getcwd() in the child
+        #            returns the resolved /private/* form, so we follow links here too.
+        # - Linux:   pwd -P resolves any symlinks in path components.
+        # Resolve-Path alone does not follow symlinks, so on POSIX we shell out to pwd -P.
+        function Get-CanonicalCwd {
+            param([Parameter(Mandatory)][string]$Path)
+            $resolved = (Resolve-Path -LiteralPath $Path).Path
+            if ($IsMacOS -or $IsLinux) {
+                $shellResolved = & /bin/sh -c "cd `"$resolved`" && pwd -P" 2>$null
+                if ($LASTEXITCODE -eq 0 -and $shellResolved) {
+                    $resolved = $shellResolved.Trim()
+                }
+            }
+            return $resolved
+        }
+
+        $expectedCwd = Get-CanonicalCwd -Path $tempCwd
 
         # Save and rebuild $global:DotbotProjectRoot so the fallback assertion is deterministic
         $savedDotbotProjectRoot = $global:DotbotProjectRoot
-        $global:DotbotProjectRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $dotbotDir)).Path
+        $global:DotbotProjectRoot = Get-CanonicalCwd -Path (Split-Path -Parent $dotbotDir)
 
         try {
             # 1. -WorkingDirectory pins the child cwd

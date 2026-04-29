@@ -401,7 +401,13 @@ function Invoke-ClaudeStream {
     
     .PARAMETER ShowVerbose
     Show detailed tool results and metadata.
-    
+
+    .PARAMETER WorkingDirectory
+    Optional working directory for the spawned claude.exe child process. If set,
+    overrides the default $global:DotbotProjectRoot. Used by the task execution
+    phase to pin Claude's cwd to the per-task git worktree so Edit/Write/Bash
+    tool calls land on the task branch instead of project root (#314).
+
     .EXAMPLE
     Invoke-ClaudeStream -Prompt "What files are in the current directory?"
     
@@ -574,11 +580,11 @@ function Invoke-ClaudeStream {
     # Claude's cwd controls where Edit/Write/Bash resolve relative paths.
     # - Default: $global:DotbotProjectRoot, so MCP discovery picks up .mcp.json.
     # - Task execution: Invoke-WorkflowProcess passes the worktree path so agent edits
-    #   land on the task branch, not on main. Worktree has a hardlinked .mcp.json so
-    #   MCP discovery still works.
-    if ($WorkingDirectory -and (Test-Path $WorkingDirectory)) {
+    #   land on the task branch, not on main. Worktree has .mcp.json copied in by
+    #   Copy-BuildArtifacts at creation time, so MCP discovery still works.
+    if ($WorkingDirectory -and (Test-Path -LiteralPath $WorkingDirectory -PathType Container)) {
         $psi.WorkingDirectory = $WorkingDirectory
-    } elseif ($global:DotbotProjectRoot -and (Test-Path $global:DotbotProjectRoot)) {
+    } elseif ($global:DotbotProjectRoot -and (Test-Path -LiteralPath $global:DotbotProjectRoot -PathType Container)) {
         $psi.WorkingDirectory = $global:DotbotProjectRoot
     }
     # Marker env var (informational, not functionally critical)

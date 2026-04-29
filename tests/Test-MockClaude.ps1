@@ -191,6 +191,78 @@ try {
     Write-Host ""
 
     # ═══════════════════════════════════════════════════════════════════
+    # WORKING DIRECTORY (#314)
+    # ═══════════════════════════════════════════════════════════════════
+
+    Write-Host "  WORKING DIRECTORY (#314)" -ForegroundColor Cyan
+    Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
+
+    if (Test-Path $claudeModule) {
+        $cwdLog = Join-Path $mockLogDir "mock-claude-cwd.log"
+        $tempCwd = Join-Path ([System.IO.Path]::GetTempPath()) "dotbot-cwd-$([System.Guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -Path $tempCwd -ItemType Directory -Force | Out-Null
+
+        # Resolve to canonical form (Windows temp paths can include short-name segments
+        # like RUNNER~1 vs runneradmin; the mock captures (Get-Location).Path which is
+        # already long-form, so we compare against the long-form too).
+        $expectedCwd = (Resolve-Path -LiteralPath $tempCwd).Path
+
+        # Save and rebuild $global:DotbotProjectRoot so the fallback assertion is deterministic
+        $savedDotbotProjectRoot = $global:DotbotProjectRoot
+        $global:DotbotProjectRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $dotbotDir)).Path
+
+        try {
+            # 1. -WorkingDirectory pins the child cwd
+            try {
+                Invoke-ClaudeStream -Prompt "cwd test explicit" -Model "opus" -WorkingDirectory $tempCwd *>&1 | Out-Null
+                $captured = if (Test-Path $cwdLog) { (Get-Content $cwdLog -Raw).Trim() } else { "" }
+                Assert-True -Name "Invoke-ClaudeStream pins cwd to -WorkingDirectory (#314)" `
+                    -Condition ($captured -ieq $expectedCwd) `
+                    -Message "Expected cwd=$expectedCwd, got cwd=$captured"
+            } catch {
+                Write-TestResult -Name "Invoke-ClaudeStream pins cwd to -WorkingDirectory (#314)" -Status Fail -Message $_.Exception.Message
+            }
+
+            # 2. Without -WorkingDirectory, falls back to $global:DotbotProjectRoot
+            try {
+                Invoke-ClaudeStream -Prompt "cwd test fallback" -Model "opus" *>&1 | Out-Null
+                $captured = if (Test-Path $cwdLog) { (Get-Content $cwdLog -Raw).Trim() } else { "" }
+                Assert-True -Name "Invoke-ClaudeStream falls back to DotbotProjectRoot when -WorkingDirectory not set" `
+                    -Condition ($captured -ieq $global:DotbotProjectRoot) `
+                    -Message "Expected cwd=$global:DotbotProjectRoot, got cwd=$captured"
+            } catch {
+                Write-TestResult -Name "Invoke-ClaudeStream falls back to DotbotProjectRoot when -WorkingDirectory not set" -Status Fail -Message $_.Exception.Message
+            }
+
+            # 3. Invoke-ProviderStream forwards -WorkingDirectory through to Claude
+            try {
+                $providerModule = Join-Path $dotbotDir "core/runtime/ProviderCLI/ProviderCLI.psm1"
+                if (Test-Path $providerModule) {
+                    Import-Module $providerModule -Force
+                    Invoke-ProviderStream -Prompt "cwd test provider" -Model "opus" -ProviderName "claude" -WorkingDirectory $tempCwd *>&1 | Out-Null
+                    $captured = if (Test-Path $cwdLog) { (Get-Content $cwdLog -Raw).Trim() } else { "" }
+                    Assert-True -Name "Invoke-ProviderStream forwards -WorkingDirectory to Claude branch (#314)" `
+                        -Condition ($captured -ieq $expectedCwd) `
+                        -Message "Expected cwd=$expectedCwd, got cwd=$captured"
+                } else {
+                    Write-TestResult -Name "Invoke-ProviderStream forwards -WorkingDirectory to Claude branch (#314)" -Status Skip -Message "ProviderCLI module not found"
+                }
+            } catch {
+                Write-TestResult -Name "Invoke-ProviderStream forwards -WorkingDirectory to Claude branch (#314)" -Status Fail -Message $_.Exception.Message
+            }
+        } finally {
+            $global:DotbotProjectRoot = $savedDotbotProjectRoot
+            if (Test-Path $tempCwd) {
+                Remove-Item -Path $tempCwd -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } else {
+        Write-TestResult -Name "Working directory tests" -Status Skip -Message "ClaudeCLI module not available"
+    }
+
+    Write-Host ""
+
+    # ═══════════════════════════════════════════════════════════════════
     # RATE LIMIT DETECTION
     # ═══════════════════════════════════════════════════════════════════
 

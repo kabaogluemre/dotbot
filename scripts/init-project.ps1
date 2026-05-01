@@ -959,10 +959,17 @@ if (Test-Path $mcpJsonPath) {
         Write-DotbotCommand "$action '$coreName' entry"
     }
 
-    # Preserve any non-core (user-added) servers verbatim
+    # Preserve any non-core (user-added) servers verbatim. Use a
+    # case-insensitive name match so a user entry like "Dotbot" is treated
+    # as the same key as canonical "dotbot" rather than producing two
+    # parallel servers in the merged file.
     if ($existingHasMcpServers) {
+        $coreNamesCi = [System.Collections.Generic.HashSet[string]]::new(
+            [string[]]@($coreServers.Keys),
+            [System.StringComparer]::OrdinalIgnoreCase
+        )
         foreach ($prop in $existing.mcpServers.PSObject.Properties) {
-            if (-not $coreServers.Contains($prop.Name)) {
+            if (-not $coreNamesCi.Contains($prop.Name)) {
                 $mergedServers[$prop.Name] = $prop.Value
                 Write-DotbotCommand "Preserved '$($prop.Name)' entry"
             }

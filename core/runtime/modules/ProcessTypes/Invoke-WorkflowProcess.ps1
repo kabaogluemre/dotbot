@@ -1629,7 +1629,7 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
             if (-not $failureReason.recoverable) {
                 Write-Status "Non-recoverable failure - skipping" -Type Error
                 try {
-                    $detail = $failureReason.reason ?? $failureReason.message ?? 'non-recoverable failure'
+                    $detail = $failureReason.description ?? $failureReason.type ?? 'non-recoverable failure'
                     Invoke-TaskMarkSkipped -Arguments @{ task_id = $task.id; skip_reason = 'non-recoverable'; skip_detail = $detail } | Out-Null
                 } catch { Write-BotLog -Level Warn -Message "Task operation failed" -Exception $_ }
                 break

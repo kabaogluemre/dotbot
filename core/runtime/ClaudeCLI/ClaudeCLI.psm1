@@ -403,7 +403,7 @@ function Invoke-ClaudeStream {
     Show detailed tool results and metadata.
 
     .PARAMETER WorkingDirectory
-    Optional working directory for the spawned claude.exe child process. If set,
+    Optional working directory for the spawned Claude CLI child process. If set,
     overrides the default $global:DotbotProjectRoot. Used by the task execution
     phase to pin Claude's cwd to the per-task git worktree so Edit/Write/Bash
     tool calls land on the task branch instead of project root (#314).

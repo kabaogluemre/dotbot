@@ -931,7 +931,11 @@ if (Test-Path $mcpJsonPath) {
     }
 
     $mergedServers = [ordered]@{}
-    $existingHasMcpServers = $existing -and $existing.PSObject.Properties['mcpServers'] -and $existing.mcpServers
+    $hasMcpServersProp = $existing -and $existing.PSObject.Properties['mcpServers']
+    if ($hasMcpServersProp -and $existing.mcpServers -and -not ($existing.mcpServers -is [System.Management.Automation.PSCustomObject])) {
+        throw ".mcp.json has 'mcpServers' but it is not an object: got $($existing.mcpServers.GetType().Name). Fix or remove the file and re-run dotbot init."
+    }
+    $existingHasMcpServers = $hasMcpServersProp -and $existing.mcpServers
 
     # Core first, in canonical order
     foreach ($coreName in $coreServers.Keys) {

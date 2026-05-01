@@ -514,12 +514,16 @@ function Update-TaskIndex {
                         $script:TaskIndex.DoneSlugs += $slug
                     }
                     'skipped' {
-                        $script:TaskIndex.Skipped[$content.id] = $entry
                         # Issue #318: intentional skips satisfy dependents,
                         # framework-error skips block them. Discriminate via
                         # the canonical skip reason (latest skip_history entry,
-                        # or top-level skip_reason fallback).
-                        if (-not (Test-IsFrameworkErrorSkip -TaskContent $content)) {
+                        # or top-level skip_reason fallback). Cache the result
+                        # on the entry so Get-DeadlockedTasks can read it
+                        # without a second filesystem pass.
+                        $isFrameworkErrorSkip = Test-IsFrameworkErrorSkip -TaskContent $content
+                        $entry | Add-Member -NotePropertyName is_framework_error_skip -NotePropertyValue $isFrameworkErrorSkip
+                        $script:TaskIndex.Skipped[$content.id] = $entry
+                        if (-not $isFrameworkErrorSkip) {
                             $script:TaskIndex.DoneIds += $content.id
                             $script:TaskIndex.DoneNames += $content.name
                             $slug = ($content.name -replace '[^a-zA-Z0-9\s-]', '' -replace '\s+', '-').ToLowerInvariant()
@@ -871,12 +875,9 @@ function Get-DeadlockedTasks {
     $blockerNameMap = @{}
 
     foreach ($t in $index.Skipped.Values) {
-        if (-not $t.file_path -or -not (Test-Path -LiteralPath $t.file_path)) { continue }
-        try {
-            $content = Get-Content -LiteralPath $t.file_path -Raw | ConvertFrom-Json
-        } catch { continue }
-
-        if (-not (Test-IsFrameworkErrorSkip -TaskContent $content)) { continue }
+        # Update-TaskIndex computed is_framework_error_skip when it loaded
+        # this entry — no need to re-read and re-parse the file here.
+        if (-not $t.is_framework_error_skip) { continue }
 
         $blockerLookup.Add($t.id)   | Out-Null
         $blockerLookup.Add($t.name) | Out-Null

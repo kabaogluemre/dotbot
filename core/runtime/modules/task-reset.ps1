@@ -141,6 +141,12 @@ function Reset-SkippedTasks {
             Import-Module $taskIndexModule -DisableNameChecking
         }
     }
+    if (-not (Get-Command Test-IsFrameworkErrorSkip -ErrorAction SilentlyContinue)) {
+        # Without the classifier the per-file try/catch would swallow a
+        # CommandNotFoundException and silently leave every skipped task in
+        # place. Surface the failure once instead.
+        throw "Reset-SkippedTasks requires Test-IsFrameworkErrorSkip from TaskIndexCache.psm1, which could not be loaded."
+    }
 
     foreach ($taskFile in $skippedTasks) {
         try {

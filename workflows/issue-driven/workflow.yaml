@@ -69,7 +69,7 @@ form:
       label: "Run Issue Pipeline"
       description: "Design, implement, and test a GitHub issue end-to-end on a shared feature branch, then open a PR."
       button: "RUN ISSUE"
-      prompt_placeholder: "GitHub issue number (e.g. 42)"
+      prompt_placeholder: "owner/repo 42 (e.g. myorg/myrepo 42)"
       show_interview: false
       show_files: false
 
@@ -83,11 +83,12 @@ form:
 # ── Task pipeline ─────────────────────────────────────────────────────────────
 #
 # Dependency chain:
-#   Design Issue
-#     └─ Design Test Cases
-#          └─ Implement Issue
-#               └─ Unit Tests
-#                    └─ Integration Tests  (optional, runs after unit tests)
+#   Clone Repository
+#     └─ Design Issue
+#          └─ Design Test Cases
+#               └─ Implement Issue
+#                    └─ Unit Tests
+#                         └─ Integration Tests  (optional, runs after unit tests)
 #
 # All tasks share the pipeline branch (feature/issue-{N}).
 # Analysis phase: 98-analyse-task.md + applicable_agents persona
@@ -95,15 +96,24 @@ form:
 # ─────────────────────────────────────────────────────────────────────────────
 
 tasks:
+  # ── Phase 0: Clone Repository ─────────────────────────────────────────────
+  # Prompt task: AI reads repository name/URL from the kickstart text and
+  # clones it into /src. No applicable_agents — execution only.
+  - name: "Clone Repository"
+    type: prompt
+    workflow: "09-clone-repository.md"
+    priority: 0
+
   # ── Phase 1: Technical Design ────────────────────────────────────────────
   - name: "Design Issue"
     type: prompt
     workflow: "10-design-issue.md"
     applicable_agents: ["design-issue-agent"]
     needs_interview: true
+    depends_on: ["Clone Repository"]
     outputs:
       - "docs/designs/issue-{input.issue_number}-*/design.md"
-    priority: 0
+    priority: 1
 
   # ── Phase 2: Test Case Design ────────────────────────────────────────────
   - name: "Design Test Cases"
@@ -111,10 +121,11 @@ tasks:
     workflow: "11-design-test-cases.md"
     applicable_agents: ["design-test-cases-agent"]
     needs_interview: true
+    optional: true
     depends_on: ["Design Issue"]
     outputs:
       - "docs/designs/issue-{input.issue_number}-*/test-cases.md"
-    priority: 1
+    priority: 2
 
   # ── Phase 3: Implementation ───────────────────────────────────────────────
   - name: "Implement Issue"
@@ -122,7 +133,7 @@ tasks:
     workflow: "12-implement-issue.md"
     applicable_agents: ["implement-issue-agent"]
     depends_on: ["Design Issue", "Design Test Cases"]
-    priority: 2
+    priority: 3
 
   # ── Phase 4a: Unit Tests ──────────────────────────────────────────────────
   - name: "Unit Tests"
@@ -130,7 +141,7 @@ tasks:
     workflow: "14-unit-test-pr.md"
     applicable_agents: ["unit-test-pr-agent"]
     depends_on: ["Implement Issue"]
-    priority: 3
+    priority: 4
 
   # ── Phase 4b: Integration Tests ───────────────────────────────────────────
   - name: "Integration Tests"
@@ -139,7 +150,7 @@ tasks:
     applicable_agents: ["integration-test-pr-agent"]
     depends_on: ["Unit Tests"]
     optional: true
-    priority: 4
+    priority: 5
 
   # ── Phase 5: Open PR ──────────────────────────────────────────────────────
   # Script task: runs open-pr.ps1 which calls `gh pr create` for the shared
@@ -148,4 +159,4 @@ tasks:
     type: script
     script_path: "scripts/open-pr.ps1"
     depends_on: ["Unit Tests", "Integration Tests"]
-    priority: 5
+    priority: 6

@@ -930,28 +930,33 @@ if (Test-Path $mcpJsonPath) {
         throw ".mcp.json exists but is not valid JSON: $($_.Exception.Message). Fix or remove the file and re-run dotbot init."
     }
 
+    # Validate root shape. ConvertFrom-Json returns $null for an empty file
+    # and unwraps scalars/arrays; both would silently corrupt the merge.
+    # Treat $null as "no usable content" and rebuild from a fresh object;
+    # throw on any non-object root so the user gets a friendly message.
+    if ($null -ne $existing -and -not ($existing -is [System.Management.Automation.PSCustomObject])) {
+        throw ".mcp.json root is not a JSON object: got $($existing.GetType().Name). Fix or remove the file and re-run dotbot init."
+    }
+    if ($null -eq $existing) {
+        $existing = [pscustomobject]@{}
+    }
+
     $mergedServers = [ordered]@{}
-    $hasMcpServersProp = $existing -and $existing.PSObject.Properties['mcpServers']
+    $hasMcpServersProp = [bool]$existing.PSObject.Properties['mcpServers']
     if ($hasMcpServersProp -and $existing.mcpServers -and -not ($existing.mcpServers -is [System.Management.Automation.PSCustomObject])) {
         throw ".mcp.json has 'mcpServers' but it is not an object: got $($existing.mcpServers.GetType().Name). Fix or remove the file and re-run dotbot init."
     }
     $existingHasMcpServers = $hasMcpServersProp -and $existing.mcpServers
 
-    # Core first, in canonical order
+    # Core entries are framework-owned: always use the canonical value so
+    # upgrades after a framework path move (e.g. #345 moved the dotbot MCP
+    # server from .bot/systems/ to .bot/core/) self-heal on re-init. User
+    # entries with non-core names are preserved verbatim in the next loop.
     foreach ($coreName in $coreServers.Keys) {
-        $existingEntry = $null
-        if ($existingHasMcpServers -and $existing.mcpServers.PSObject.Properties[$coreName]) {
-            $existingEntry = $existing.mcpServers.$coreName
-        }
-
-        if ($existingEntry -and -not $Force) {
-            $mergedServers[$coreName] = $existingEntry
-            Write-DotbotCommand "Kept existing '$coreName' entry (use -Force to refresh)"
-        } else {
-            $mergedServers[$coreName] = $coreServers[$coreName]
-            $action = if ($existingEntry) { "Refreshed" } else { "Added" }
-            Write-DotbotCommand "$action '$coreName' entry"
-        }
+        $hadExisting = $existingHasMcpServers -and $existing.mcpServers.PSObject.Properties[$coreName]
+        $mergedServers[$coreName] = $coreServers[$coreName]
+        $action = if ($hadExisting) { "Refreshed" } else { "Added" }
+        Write-DotbotCommand "$action '$coreName' entry"
     }
 
     # Preserve any non-core (user-added) servers verbatim
@@ -966,7 +971,7 @@ if (Test-Path $mcpJsonPath) {
 
     # Preserve any non-mcpServers top-level keys (e.g. tool-specific settings)
     # by mutating $existing in place rather than rebuilding from scratch.
-    if ($existing.PSObject.Properties['mcpServers']) {
+    if ($hasMcpServersProp) {
         $existing.mcpServers = $mergedServers
     } else {
         $existing | Add-Member -NotePropertyName 'mcpServers' -NotePropertyValue $mergedServers -Force

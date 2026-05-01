@@ -474,6 +474,70 @@ if (-not $dotbotInstalled) {
     } finally {
         Remove-TestProject -Path $invalidProject
     }
+
+    # Case 5: empty .mcp.json (parses to $null) is treated as no usable
+    # content and rebuilt cleanly with the core entries.
+    $emptyProject = New-TestProject -Prefix "dotbot-test-mcpempty"
+    try {
+        $emptyMcpJson = Join-Path $emptyProject ".mcp.json"
+        "" | Set-Content -Path $emptyMcpJson -Encoding UTF8
+
+        Push-Location $emptyProject
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") 2>&1 | Out-Null
+        $emptyExit = $LASTEXITCODE
+        Pop-Location
+
+        Assert-True -Name "merge: empty .mcp.json initialises cleanly (no null-deref)" `
+            -Condition ($emptyExit -eq 0) `
+            -Message "Expected init to succeed against an empty .mcp.json, got exit=$emptyExit"
+        $mcpEmpty = Get-Content $emptyMcpJson -Raw | ConvertFrom-Json
+        Assert-True -Name "merge: empty .mcp.json has core 'dotbot' entry after init" `
+            -Condition ($null -ne $mcpEmpty.mcpServers.dotbot) `
+            -Message "dotbot core entry missing after init against empty .mcp.json"
+    } finally {
+        Remove-TestProject -Path $emptyProject
+    }
+
+    # Case 6: non-object root (array, string, scalar) fails loudly instead
+    # of silently corrupting the file via Add-Member unrolling.
+    $nonObjProject = New-TestProject -Prefix "dotbot-test-mcpnonobj"
+    try {
+        $nonObjMcpJson = Join-Path $nonObjProject ".mcp.json"
+        '[1, 2, 3]' | Set-Content -Path $nonObjMcpJson -Encoding UTF8
+
+        Push-Location $nonObjProject
+        $nonObjOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") 2>&1 | Out-String
+        $nonObjExit = $LASTEXITCODE
+        Pop-Location
+
+        Assert-True -Name "merge: non-object root fails loudly (non-zero exit AND specific error)" `
+            -Condition (($nonObjExit -ne 0) -and ($nonObjOutput -match '(?i)(not a JSON object|root)')) `
+            -Message "Expected init to fail with non-zero exit and root-shape error for non-object .mcp.json, got exit=$nonObjExit, output: $nonObjOutput"
+    } finally {
+        Remove-TestProject -Path $nonObjProject
+    }
+
+    # Case 7: stale core entry (e.g. left over from a pre-#345 path layout)
+    # is auto-refreshed even without -Force, so re-init self-heals after a
+    # framework path move. Without this, .bot/go.ps1 would still fail with
+    # "Dotbot MCP server not registered".
+    $staleProject = New-TestProject -Prefix "dotbot-test-mcpstale"
+    try {
+        $staleMcpJson = Join-Path $staleProject ".mcp.json"
+        '{ "mcpServers": { "dotbot": { "command": "pwsh", "args": [".bot/systems/mcp/dotbot-mcp.ps1"] } } }' |
+            Set-Content -Path $staleMcpJson -Encoding UTF8
+
+        Push-Location $staleProject
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dotbotDir "scripts\init-project.ps1") 2>&1 | Out-Null
+        Pop-Location
+
+        $mcpStale = Get-Content $staleMcpJson -Raw | ConvertFrom-Json
+        Assert-True -Name "merge: stale core entry auto-refreshed without -Force" `
+            -Condition (($mcpStale.mcpServers.dotbot.args -join ' ') -notmatch 'systems/mcp') `
+            -Message "Stale .bot/systems/mcp/ path retained on re-init; expected canonical .bot/core/mcp/ path"
+    } finally {
+        Remove-TestProject -Path $staleProject
+    }
     }
 
     # --- Init with -Stack dotnet ---

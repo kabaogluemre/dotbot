@@ -231,8 +231,9 @@ try {
             try {
                 Invoke-ClaudeStream -Prompt "cwd test explicit" -Model "opus" -WorkingDirectory $tempCwd *>&1 | Out-Null
                 $captured = if (Test-Path $cwdLog) { (Get-Content $cwdLog -Raw).Trim() } else { "" }
+                $pathsMatch = if ($IsWindows) { $captured -ieq $expectedCwd } else { $captured -ceq $expectedCwd }
                 Assert-True -Name "Invoke-ClaudeStream pins cwd to -WorkingDirectory (#314)" `
-                    -Condition ($captured -ieq $expectedCwd) `
+                    -Condition $pathsMatch `
                     -Message "Expected cwd=$expectedCwd, got cwd=$captured"
             } catch {
                 Write-TestResult -Name "Invoke-ClaudeStream pins cwd to -WorkingDirectory (#314)" -Status Fail -Message $_.Exception.Message
@@ -242,8 +243,9 @@ try {
             try {
                 Invoke-ClaudeStream -Prompt "cwd test fallback" -Model "opus" *>&1 | Out-Null
                 $captured = if (Test-Path $cwdLog) { (Get-Content $cwdLog -Raw).Trim() } else { "" }
+                $pathsMatch = if ($IsWindows) { $captured -ieq $global:DotbotProjectRoot } else { $captured -ceq $global:DotbotProjectRoot }
                 Assert-True -Name "Invoke-ClaudeStream falls back to DotbotProjectRoot when -WorkingDirectory not set" `
-                    -Condition ($captured -ieq $global:DotbotProjectRoot) `
+                    -Condition $pathsMatch `
                     -Message "Expected cwd=$global:DotbotProjectRoot, got cwd=$captured"
             } catch {
                 Write-TestResult -Name "Invoke-ClaudeStream falls back to DotbotProjectRoot when -WorkingDirectory not set" -Status Fail -Message $_.Exception.Message
@@ -256,8 +258,9 @@ try {
                     Import-Module $providerModule -Force
                     Invoke-ProviderStream -Prompt "cwd test provider" -Model "opus" -ProviderName "claude" -WorkingDirectory $tempCwd *>&1 | Out-Null
                     $captured = if (Test-Path $cwdLog) { (Get-Content $cwdLog -Raw).Trim() } else { "" }
+                    $pathsMatch = if ($IsWindows) { $captured -ieq $expectedCwd } else { $captured -ceq $expectedCwd }
                     Assert-True -Name "Invoke-ProviderStream forwards -WorkingDirectory to Claude branch (#314)" `
-                        -Condition ($captured -ieq $expectedCwd) `
+                        -Condition $pathsMatch `
                         -Message "Expected cwd=$expectedCwd, got cwd=$captured"
                 } else {
                     Write-TestResult -Name "Invoke-ProviderStream forwards -WorkingDirectory to Claude branch (#314)" -Status Skip -Message "ProviderCLI module not found"

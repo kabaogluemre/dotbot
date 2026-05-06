@@ -1488,10 +1488,11 @@ Do NOT implement the task. Your job is research and preparation only.
                 $branchName = $wtInfo.branch_name
                 Write-Status "Using worktree: $worktreePath" -Type Info
             } else {
-                # Guard: ensure main repo is on base branch before creating a new worktree (Fix: wrong-branch merge)
-                try { Assert-OnBaseBranch -ProjectRoot $projectRoot | Out-Null } catch {
-                    Write-Status "Branch guard warning: $($_.Exception.Message)" -Type Warn
-                }
+                # Worktree forks from whatever branch the main repo is currently
+                # on (resolved via Get-BaseBranch inside New-TaskWorktree). We
+                # deliberately do NOT force-switch to main here: that destroys
+                # tracked-on-feature-branch-but-not-on-main files in the working
+                # tree (e.g. .bot/ when the user committed it on a feature branch).
                 $wtResult = New-TaskWorktree -TaskId $task.id -TaskName $task.name `
                     -ProjectRoot $projectRoot -BotRoot $botRoot `
                     -BranchName ($sharedBranch ?? "")
@@ -2033,7 +2034,6 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
                         $cleanupMap.Remove($task.id)
                         Write-WorktreeMap -Map $cleanupMap
                     }
-                    try { Assert-OnBaseBranch -ProjectRoot $projectRoot | Out-Null } catch { Write-BotLog -Level Warn -Message "Task operation failed" -Exception $_ }
                 }
             }
             $processData.heartbeat_status = "Terminal ($taskTerminalState): $($task.name)"
@@ -2061,8 +2061,6 @@ Work on this task autonomously. When complete, ensure you call task_mark_done vi
                             $cleanupMap.Remove($task.id)
                             Write-WorktreeMap -Map $cleanupMap
                         }
-                        # Re-assert base branch after failed-task cleanup (Fix: wrong-branch merge)
-                        try { Assert-OnBaseBranch -ProjectRoot $projectRoot | Out-Null } catch { Write-BotLog -Level Warn -Message "Task operation failed" -Exception $_ }
                     }
                 }
             }

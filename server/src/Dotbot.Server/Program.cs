@@ -3,7 +3,9 @@ using Azure.Storage.Blobs;
 using Dotbot.Server;
 using Dotbot.Server.Models;
 using Dotbot.Server.Services;
+using Dotbot.Server.Services.Attachments;
 using Dotbot.Server.Services.Delivery;
+using Dotbot.Server.Validation;
 using Microsoft.Agents.Authentication;
 using Microsoft.Agents.Builder;
 using Microsoft.Agents.Hosting.AspNetCore;
@@ -12,8 +14,11 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Identity.Web;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 using Serilog;
 using Serilog.Sinks.ApplicationInsights.TelemetryConverters;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 
@@ -94,12 +99,23 @@ try
 
     // Configuration bindings
     builder.Services.Configure<AuthSettings>(builder.Configuration.GetSection("Auth"));
+    builder.Services.Configure<BlobStorageSettings>(builder.Configuration.GetSection("BlobStorage"));
     builder.Services.Configure<DeliveryChannelSettings>(builder.Configuration.GetSection("DeliveryChannels"));
     builder.Services.Configure<BusinessHoursSettings>(builder.Configuration.GetSection("BusinessHours"));
+    builder.Services.Configure<QuestionTemplateValidationSettings>(
+        builder.Configuration.GetSection("Validation:QuestionTemplate"));
+
+    // Attachment storage backend (selectable via BlobStorage:Backend)
+    var attachmentBackend = builder.Configuration["BlobStorage:Backend"] ?? "AzureBlob";
+    if (string.Equals(attachmentBackend, "Local", StringComparison.OrdinalIgnoreCase))
+        builder.Services.AddSingleton<IAttachmentStorage, LocalFileAttachmentStorage>();
+    else
+        builder.Services.AddSingleton<IAttachmentStorage, AzureBlobAttachmentStorage>();
 
     // Core application services
     builder.Services.AddSingleton<StoragePathResolver>();
     builder.Services.AddSingleton<TemplateStorageService>();
+    builder.Services.AddSingleton<QuestionTemplateValidator>();
     builder.Services.AddSingleton<InstanceStorageService>();
     builder.Services.AddSingleton<ResponseStorageService>();
     builder.Services.AddSingleton<AttachmentStorageService>();
@@ -113,6 +129,7 @@ try
     builder.Services.AddSingleton<JwtSigningKeyProvider>();
     builder.Services.AddSingleton<TokenStorageService>();
     builder.Services.AddSingleton<MagicLinkService>();
+    builder.Services.AddSingleton<NotificationSummaryBuilder>();
 
     // Delivery providers
     builder.Services.AddSingleton<IQuestionDeliveryProvider, TeamsDeliveryProvider>();
@@ -205,23 +222,28 @@ try
     });
 
     // ── v1: Publish a question template ─────────────────────────────────────
-    app.MapPost("/api/templates", async (HttpRequest request, TemplateStorageService templates, ILogger<Program> logger) =>
+    app.MapPost("/api/templates", async (HttpRequest request, TemplateStorageService templates, QuestionTemplateValidator validator, ILogger<Program> logger) =>
     {
-        var template = await request.ReadFromJsonAsync<QuestionTemplate>();
+        QuestionTemplate? template;
+        try
+        {
+            template = await request.ReadFromJsonAsync<QuestionTemplate>();
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning("Template publish rejected: malformed JSON: {Message}", ex.Message);
+            return Results.BadRequest(new { error = "Invalid JSON payload", errors = new[] { "Invalid JSON payload", ex.Message } });
+        }
         if (template is null)
         {
             logger.LogWarning("Template publish rejected: invalid JSON payload");
-            return Results.BadRequest(new { error = "Invalid JSON payload" });
+            return Results.BadRequest(new { error = "Invalid JSON payload", errors = new[] { "Invalid JSON payload" } });
         }
-        if (template.QuestionId == Guid.Empty)
+        var errors = validator.Validate(template);
+        if (errors.Count > 0)
         {
-            logger.LogWarning("Template publish rejected: questionId must be a GUID");
-            return Results.BadRequest(new { error = "questionId must be a GUID" });
-        }
-        if (string.IsNullOrWhiteSpace(template.Project.ProjectId))
-        {
-            logger.LogWarning("Template publish rejected: project.projectId is required");
-            return Results.BadRequest(new { error = "project.projectId is required" });
+            logger.LogWarning("Template publish rejected: {Reasons}", string.Join("; ", errors));
+            return Results.BadRequest(new { error = errors[0], errors });
         }
         await templates.SaveTemplateAsync(template);
         logger.LogInformation("Template published: {QuestionId} v{Version} for project {ProjectId}",
@@ -330,8 +352,8 @@ try
         return Results.Ok(list.OrderBy(r => r.SubmittedAt));
     });
 
-    // ── Download attachment by blob path (API key protected) ────────────────
-    app.MapGet("/api/attachments/{**blobPath}", async (
+    // ── Download response attachment by blob path (API key protected) ────────
+    app.MapGet("/api/response-attachments/{**blobPath}", async (
         string blobPath,
         AttachmentStorageService attachments,
         ILogger<Program> logger) =>
@@ -342,6 +364,100 @@ try
         var fileName = Path.GetFileName(blobPath);
         return Results.File(stream, contentType, fileName);
     });
+
+    // ── Template attachment upload ────────────────────────────────────────────
+    app.MapPost("/api/attachments", async (
+        HttpRequest request,
+        IAttachmentStorage attachmentStorage,
+        IOptions<BlobStorageSettings> blobSettings,
+        ILogger<Program> logger,
+        CancellationToken ct) =>
+    {
+        if (!request.HasFormContentType)
+            return Results.BadRequest(new { error = "multipart/form-data required" });
+
+        var form = await request.ReadFormAsync(ct);
+        var file = form.Files.GetFile("file");
+        if (file is null)
+            return Results.BadRequest(new { error = "file field is required" });
+
+        var maxBytes = blobSettings.Value.MaxAttachmentSizeMb * 1024L * 1024L;
+        if (file.Length > maxBytes)
+        {
+            logger.LogWarning("Attachment upload rejected: size {Size} exceeds limit {Limit}", file.Length, maxBytes);
+            return Results.StatusCode(413);
+        }
+
+        var contentType = file.ContentType ?? "application/octet-stream";
+        await using var stream = file.OpenReadStream();
+        AttachmentUploadResult result;
+        try
+        {
+            result = await attachmentStorage.UploadAsync(file.FileName, contentType, stream, file.Length, ct);
+        }
+        catch (ArgumentException ex)
+        {
+            logger.LogWarning("Attachment upload rejected: invalid file name — {Message}", ex.Message);
+            return Results.BadRequest(new { error = ex.Message });
+        }
+
+        logger.LogInformation("Attachment uploaded: {StorageRef} ({Name}, {Size} bytes)", result.StorageRef, result.Name, result.SizeBytes);
+        return Results.Ok(new
+        {
+            attachmentId = result.AttachmentId,
+            storageRef = result.StorageRef,
+            name = result.Name,
+            contentType = result.ContentType,
+            sizeBytes = result.SizeBytes
+        });
+    });
+
+    // ── Template attachment download (JWT protected) ──────────────────────────
+    app.MapGet("/api/attachments/{**storageRef}", async (
+        string storageRef,
+        string? token,
+        IAttachmentStorage attachmentStorage,
+        JwtSigningKeyProvider jwtKeyProvider,
+        ILogger<Program> logger,
+        CancellationToken ct) =>
+    {
+        if (string.IsNullOrEmpty(token))
+            return Results.Unauthorized();
+
+        var validationParams = await jwtKeyProvider.GetValidationParametersAsync();
+        try
+        {
+            new JwtSecurityTokenHandler().ValidateToken(token, validationParams, out _);
+        }
+        catch (SecurityTokenException ex)
+        {
+            logger.LogWarning("Attachment download rejected: invalid token — {Message}", ex.Message);
+            return Results.Unauthorized();
+        }
+
+        var result = await attachmentStorage.DownloadAsync(storageRef, ct);
+        if (result is null)
+        {
+            logger.LogWarning("Attachment not found: {StorageRef}", storageRef);
+            return Results.NotFound();
+        }
+
+        var fileName = Path.GetFileName(storageRef);
+        return Results.File(result.Value.Content, result.Value.ContentType, fileName);
+    });
+
+    // ── Template attachment delete (API key protected) ────────────────────────
+    app.MapDelete("/api/attachments/{**storageRef}", async (
+        string storageRef,
+        IAttachmentStorage attachmentStorage,
+        ILogger<Program> logger,
+        CancellationToken ct) =>
+    {
+        await attachmentStorage.DeleteAsync(storageRef, ct);
+        logger.LogInformation("Attachment deleted: {StorageRef}", storageRef);
+        return Results.NoContent();
+    });
+    app.MapTestModeEndpoints();
 
     // ── Revoke a device token (API key protected) ───────────────────────────
     app.MapPost("/tokens/revoke", async (HttpRequest request, TokenStorageService tokenStorage, ILogger<Program> logger) =>
@@ -635,6 +751,14 @@ static void LogStartupConfiguration(WebApplicationBuilder builder)
     Log.Information("  ExemptChannels: {Channels}", config["BusinessHours:ExemptChannels"] ?? "(none)");
     Log.Information("  FallbackTimeZone: {Tz}", config["BusinessHours:FallbackTimeZone"] ?? "UTC");
     Log.Information("  FallbackCountryCode: {Country}", config["BusinessHours:FallbackCountryCode"] ?? "GB");
+
+    // Validation
+    Log.Information("");
+    Log.Information("[VALIDATION]");
+    Log.Information("  QuestionTemplate.MaxAttachments: {Max}",
+        config["Validation:QuestionTemplate:MaxAttachments"] ?? QuestionTemplateValidationSettings.DefaultMaxAttachments.ToString());
+    Log.Information("  QuestionTemplate.MaxReferenceLinks: {Max}",
+        config["Validation:QuestionTemplate:MaxReferenceLinks"] ?? QuestionTemplateValidationSettings.DefaultMaxReferenceLinks.ToString());
 
     // Application Insights
     Log.Information("");

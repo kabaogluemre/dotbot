@@ -1403,6 +1403,46 @@ $docContext
                     break
                 }
 
+                "/api/task/submit-review" {
+                    if ($method -eq "POST") {
+                        $contentType = "application/json; charset=utf-8"
+                        try {
+                            $reader = New-Object System.IO.StreamReader($request.InputStream)
+                            $body = $reader.ReadToEnd() | ConvertFrom-Json
+                            $reader.Close()
+                            if (-not $body.task_id) {
+                                $statusCode = 400
+                                $content = @{ success = $false; error = "Missing required field: task_id" } | ConvertTo-Json -Compress
+                                break
+                            }
+                            if (-not $body.PSObject.Properties['approved'] -or $null -eq $body.approved) {
+                                $statusCode = 400
+                                $content = @{ success = $false; error = "Missing required field: approved (must be true or false)" } | ConvertTo-Json -Compress
+                                break
+                            }
+                            if ($body.approved -isnot [bool]) {
+                                $statusCode = 400
+                                $content = @{ success = $false; error = "'approved' must be a JSON boolean (true or false), not a string" } | ConvertTo-Json -Compress
+                                break
+                            }
+                            $reviewArgs = @{
+                                TaskId   = $body.task_id
+                                Approved = [bool]$body.approved
+                            }
+                            if ($body.PSObject.Properties['comment'] -and $body.comment)            { $reviewArgs['Comment']       = $body.comment }
+                            if ($body.PSObject.Properties['what_was_wrong'] -and $body.what_was_wrong) { $reviewArgs['WhatWasWrong'] = $body.what_was_wrong }
+                            $content = Submit-TaskReview @reviewArgs | ConvertTo-Json -Depth 5 -Compress
+                        } catch {
+                            $statusCode = 500
+                            $content = @{ success = $false; error = "Failed to process review: $($_.Exception.Message)" } | ConvertTo-Json -Compress
+                        }
+                    } else {
+                        $statusCode = 405
+                        $content = @{ success = $false; error = "Method not allowed" } | ConvertTo-Json -Compress
+                    }
+                    break
+                }
+
                 "/api/task/ignore" {
                     if ($method -eq "POST") {
                         $contentType = "application/json; charset=utf-8"
@@ -1530,7 +1570,7 @@ $docContext
                                 $statusCode = 400
                                 $content = @{ success = $false; error = "Missing required 'prompt' field" } | ConvertTo-Json -Compress
                             } else {
-                                $content = Start-TaskCreation -UserPrompt $body.prompt -NeedsInterview ($body.needs_interview -eq $true) | ConvertTo-Json -Compress
+                                $content = Start-TaskCreation -UserPrompt $body.prompt -NeedsInterview ($body.needs_interview -eq $true) -NeedsReview ($body.needs_review -eq $true) | ConvertTo-Json -Compress
                             }
                         } catch {
                             $statusCode = 500
@@ -1931,13 +1971,13 @@ $docContext
                                 repository = if ($manifest['repository']) { "$($manifest['repository'])" } else { '' }
                                 homepage = if ($manifest['homepage']) { "$($manifest['homepage'])" } else { '' }
                                 agents = if ($manifest['agents'] -and $manifest['agents'].Count -gt 0) { @($manifest['agents'] | Where-Object { $_ }) } else {
-                                    # Fallback: discover from prompts directory
-                                    $wfAgentsDir = Join-Path $wfDir "recipes\agents"
-                                    if (Test-Path $wfAgentsDir) { @(Get-ChildItem $wfAgentsDir -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) } else { @() }
+                                    # Fallback: recursively discover folders containing AGENT.md.
+                                    # Non-recursive enumeration hid registry-added nested agents (#406).
+                                    @(Get-RecipeFolders -BaseDir (Join-Path $wfDir "recipes\agents") -MarkerFile "AGENT.md")
                                 }
                                 skills = if ($manifest['skills'] -and $manifest['skills'].Count -gt 0) { @($manifest['skills'] | Where-Object { $_ }) } else {
-                                    $wfSkillsDir = Join-Path $wfDir "recipes\skills"
-                                    if (Test-Path $wfSkillsDir) { @(Get-ChildItem $wfSkillsDir -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) } else { @() }
+                                    # Fallback: recursively discover folders containing SKILL.md (#406).
+                                    @(Get-RecipeFolders -BaseDir (Join-Path $wfDir "recipes\skills") -MarkerFile "SKILL.md")
                                 }
                                 tools = if ($manifest['tools'] -and $manifest['tools'].Count -gt 0) { @($manifest['tools'] | Where-Object { $_ }) } else { @() }
                                 status = if ($hasRunning) { 'running' } else { 'idle' }

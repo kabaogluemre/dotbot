@@ -386,6 +386,116 @@ $envOnlyChecks = @(Convert-ManifestRequiresToPreflightChecks -Requires @{
 })
 Assert-Equal -Name "env_vars-only requires returns 1 check" -Expected 1 -Actual $envOnlyChecks.Count
 
+# Schema error path: missing 'var' in env_vars now throws (issue #319) instead
+# of silently dropping the entry.
+$throwCaught = $false
+try {
+    Convert-ManifestRequiresToPreflightChecks -Requires @{
+        env_vars = @(@{ name = "GITHUB_TOKEN"; message = "required" })
+    } -WorkflowName "test-wf" | Out-Null
+} catch {
+    $throwCaught = $true
+    Assert-True -Name "env_vars missing 'var' throws naming the field" `
+        -Condition ($_.Exception.Message -match "missing the required 'var' field") `
+        -Message "Error message did not name the missing field. Got: $($_.Exception.Message)"
+    Assert-True -Name "env_vars missing 'var' throws naming the workflow" `
+        -Condition ($_.Exception.Message -match "test-wf") `
+        -Message "Error message did not name the workflow"
+}
+Assert-True -Name "env_vars missing 'var' throws (was silent skip)" `
+    -Condition $throwCaught `
+    -Message "Convert-ManifestRequiresToPreflightChecks should throw on missing 'var', not silent-skip"
+
+# Schema error: missing 'name' in mcp_servers
+$throwCaught = $false
+try {
+    Convert-ManifestRequiresToPreflightChecks -Requires @{
+        mcp_servers = @(@{ message = "required" })
+    } | Out-Null
+} catch { $throwCaught = $true }
+Assert-True -Name "mcp_servers missing 'name' throws" -Condition $throwCaught
+
+# Schema error: missing 'name' in cli_tools
+$throwCaught = $false
+try {
+    Convert-ManifestRequiresToPreflightChecks -Requires @{
+        cli_tools = @(@{ message = "required" })
+    } | Out-Null
+} catch { $throwCaught = $true }
+Assert-True -Name "cli_tools missing 'name' throws" -Condition $throwCaught
+
+Write-Host ""
+
+# ═══════════════════════════════════════════════════════════════════
+# TEST-WORKFLOWMANIFESTSCHEMA
+# ═══════════════════════════════════════════════════════════════════
+
+Write-Host "  TEST-WORKFLOWMANIFESTSCHEMA" -ForegroundColor Cyan
+Write-Host "  ────────────────────────────────────────────" -ForegroundColor DarkGray
+
+# Valid manifest produces no errors
+$validManifest = @{
+    name = "valid-wf"
+    requires = @{
+        env_vars = @(@{ var = "API_KEY"; name = "API Key"; message = "required" })
+        mcp_servers = @(@{ name = "dotbot"; message = "required" })
+        cli_tools = @(@{ name = "git"; message = "required" })
+    }
+}
+$validErrors = @(Test-WorkflowManifestSchema -Manifest $validManifest)
+Assert-Equal -Name "Valid manifest returns 0 errors" -Expected 0 -Actual $validErrors.Count
+
+# Manifest with no requires returns 0 errors
+$noReqErrors = @(Test-WorkflowManifestSchema -Manifest @{ name = "x" })
+Assert-Equal -Name "Manifest without requires returns 0 errors" -Expected 0 -Actual $noReqErrors.Count
+
+# env_vars missing 'var' (the original bug from issue #319): one error
+$badEnvVars = @{
+    name = "bad-wf"
+    requires = @{
+        env_vars = @(@{ name = "GITHUB_TOKEN"; message = "required" })
+    }
+}
+$badErrors = @(Test-WorkflowManifestSchema -Manifest $badEnvVars)
+Assert-Equal -Name "env_vars missing 'var' produces 1 error" -Expected 1 -Actual $badErrors.Count
+Assert-True -Name "Error names the workflow" `
+    -Condition ($badErrors[0] -match "bad-wf") `
+    -Message "Workflow name not in error: $($badErrors[0])"
+Assert-True -Name "Error names the missing field" `
+    -Condition ($badErrors[0] -match "'var'") `
+    -Message "Field name not in error"
+Assert-True -Name "Error shows the offending entry" `
+    -Condition ($badErrors[0] -match "GITHUB_TOKEN") `
+    -Message "Offending entry not shown"
+Assert-True -Name "Error shows the expected schema" `
+    -Condition ($badErrors[0] -match "Expected schema:") `
+    -Message "Expected schema line missing"
+
+# Multiple bad entries each produce their own error
+$multiBad = @{
+    name = "multi-bad"
+    requires = @{
+        env_vars = @(
+            @{ name = "ENTRY_ONE" },
+            @{ var = "OK_VAR" },
+            @{ name = "ENTRY_TWO" }
+        )
+        mcp_servers = @(@{ message = "missing name" })
+        cli_tools = @(@{ message = "missing name" })
+    }
+}
+$multiErrors = @(Test-WorkflowManifestSchema -Manifest $multiBad)
+Assert-Equal -Name "Multiple bad entries produce 4 errors (2 env + 1 mcp + 1 cli)" `
+    -Expected 4 -Actual $multiErrors.Count
+
+# WorkflowName param overrides manifest.name in error output
+$overrideErrors = @(Test-WorkflowManifestSchema -Manifest @{
+    requires = @{ env_vars = @(@{ name = "X" }) }
+} -WorkflowName "override-name")
+Assert-True -Name "WorkflowName param appears in error" `
+    -Condition ($overrideErrors[0] -match "override-name") `
+    -Message "Override name not honored"
+
 Write-Host ""
 
 # ═══════════════════════════════════════════════════════════════════
@@ -483,10 +593,15 @@ try {
     if (Test-Path $taskFile) {
         $taskJson = Get-Content $taskFile -Raw | ConvertFrom-Json
         Assert-Equal -Name "Task JSON has correct name" -Expected "Fetch Jira Context" -Actual $taskJson.name
-        Assert-Equal -Name "Task JSON has correct type" -Expected "prompt" -Actual $taskJson.type
+        Assert-Equal -Name "Task JSON has correct type" -Expected "prompt_template" -Actual $taskJson.type
+        Assert-Equal -Name "Task JSON has correct prompt path" -Expected "recipes/prompts/00-interview.md" -Actual $taskJson.prompt
         Assert-Equal -Name "Task JSON has correct workflow" -Expected "start-from-jira" -Actual $taskJson.workflow
         Assert-Equal -Name "Task JSON has correct priority" -Expected 1 -Actual $taskJson.priority
         Assert-Equal -Name "Task JSON has correct status" -Expected "todo" -Actual $taskJson.status
+        Assert-True -Name "prompt→prompt_template inherits skip_analysis=false" `
+            -Condition ($taskJson.skip_analysis -eq $false) -Message "Expected skip_analysis=false for prompt-derived prompt_template"
+        Assert-True -Name "prompt→prompt_template inherits skip_worktree=false" `
+            -Condition ($taskJson.skip_worktree -eq $false) -Message "Expected skip_worktree=false for prompt-derived prompt_template"
         Assert-Equal -Name "Task JSON has on_failure" -Expected "halt" -Actual $taskJson.on_failure
         Assert-True -Name "Task JSON has outputs" `
             -Condition (@($taskJson.outputs).Count -eq 1) -Message "Expected 1 output"
@@ -549,6 +664,8 @@ try {
             -Expected "recipes/prompts/02a-plan-internet-research.md" -Actual $tgpJson.prompt
         Assert-Equal -Name "task_gen+workflow .md workflow is folder name not filename" `
             -Expected "default" -Actual $tgpJson.workflow
+        Assert-True -Name "task_gen→prompt_template keeps skip_analysis=true" `
+            -Condition ($tgpJson.skip_analysis -eq $true) -Message "Expected skip_analysis=true for task_gen-derived prompt_template"
     }
 
     # task_gen + workflow: non-.md value → should stay task_gen (workflow name for filtering)
@@ -616,6 +733,12 @@ try {
     $pzJson = Get-Content $pzFile -Raw | ConvertFrom-Json
     Assert-Equal -Name "Priority 0 preserved (not replaced by default)" `
         -Expected 0 -Actual $pzJson.priority
+
+    # type: prompt + workflow: *.md → dispatched as prompt_template (regression for #404 dispatch change)
+    Assert-Equal -Name "type:prompt+workflow.md dispatched as prompt_template" `
+        -Expected "prompt_template" -Actual $pzJson.type
+    Assert-Equal -Name "type:prompt+workflow.md sets prompt path" `
+        -Expected "recipes/prompts/00-launch.md" -Actual $pzJson.prompt
 
 } finally {
     Remove-Item -Path $taskRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -757,6 +880,38 @@ try {
         Assert-True -Name ".env.local adds missing SECRET=" `
             -Condition ($content2 -match "SECRET=") `
             -Message "Missing var not added"
+    }
+
+    # Schema error: missing 'var' now throws a clear error (issue #319) instead
+    # of crashing with "Value cannot be null" from Hashtable.ContainsKey($null).
+    Remove-Item $envLocalPath -Force -ErrorAction SilentlyContinue
+    $throwCaught = $false
+    $errMsg = ""
+    try {
+        New-EnvLocalScaffold -EnvLocalPath $envLocalPath `
+            -EnvVars @(@{ name = "GITHUB_TOKEN"; message = "required" }) `
+            -WorkflowName "test-wf"
+    } catch {
+        $throwCaught = $true
+        $errMsg = $_.Exception.Message
+    }
+    Assert-True -Name "New-EnvLocalScaffold throws on missing 'var'" -Condition $throwCaught
+    if ($throwCaught) {
+        Assert-True -Name "Throw message names the workflow" `
+            -Condition ($errMsg -match "test-wf") `
+            -Message "Workflow name missing from error: $errMsg"
+        Assert-True -Name "Throw message names the 'var' field" `
+            -Condition ($errMsg -match "'var'") `
+            -Message "Field name missing from error"
+        Assert-True -Name "Throw message shows the offending entry" `
+            -Condition ($errMsg -match "GITHUB_TOKEN") `
+            -Message "Offending entry not shown"
+        Assert-True -Name "Throw message shows expected schema" `
+            -Condition ($errMsg -match "Expected schema:") `
+            -Message "Expected schema line missing"
+        Assert-True -Name "Throw is NOT the legacy null-key crash" `
+            -Condition ($errMsg -notmatch "Value cannot be null") `
+            -Message "Still hitting the legacy ContainsKey(`$null) crash"
     }
 
 } finally {
@@ -1149,8 +1304,10 @@ Assert-True -Name "Paused branch does NOT call Complete-TaskWorktree" `
 Assert-True -Name "Paused branch does NOT increment tasks_completed" `
     -Condition ($parkedBranchBody -notmatch '\$tasksProcessed\+\+') `
     -Message "tasks_completed must not be incremented for paused tasks"
-Assert-True -Name "Paused branch emits 'Paused (needs-input)' heartbeat" `
-    -Condition ($workflowSrc -match '"Paused\s*\(needs-input\):\s*\$\(\$task\.name\)"')
+Assert-True -Name "Paused branch uses parkLabel for heartbeat (needs-input or needs-review)" `
+    -Condition ($workflowSrc -match '\$parkLabel\s*=\s*if\s*\(\s*\$taskNeedsReview\s*\)' -and $workflowSrc -match 'Paused.*\$parkLabel.*\$task\.name')
+Assert-True -Name "Paused branch handles needs-review park state" `
+    -Condition ($workflowSrc -match '\$taskNeedsReview\s*=\s*\$true')
 
 Write-Host ""
 

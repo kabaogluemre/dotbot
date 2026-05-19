@@ -81,7 +81,7 @@ Main loop başlamadan önce:
 $sharedBranch = $null
 $workflowManifest = Get-ActiveWorkflowManifest -BotRoot $botRoot
 if ($workflowManifest -and $workflowManifest.shared_branch) {
-    $promptFile = Join-Path $botRoot ".control\launchers\kickstart-prompt.txt"
+    $promptFile = Join-Path $botRoot ".control\launchers\workflow-launch-prompt.txt"
     $resolved = $workflowManifest.shared_branch
     if (Test-Path $promptFile) {
         $issueNumber = (Get-Content $promptFile -Raw).Trim() -replace '\D', ''
@@ -96,7 +96,7 @@ if ($workflowManifest -and $workflowManifest.shared_branch) {
 }
 ```
 
-`{input.issue_number}` şablonu `kickstart-prompt.txt`'ten (kullanıcının UI'a girdiği değer) çözülür. Şu an desteklenen tek placeholder budur.
+`{input.issue_number}` şablonu `workflow-launch-prompt.txt`'ten (kullanıcının UI'a girdiği değer) çözülür. Şu an desteklenen tek placeholder budur.
 
 ---
 
@@ -228,7 +228,7 @@ tasks:
 `type: script` task olarak çalışır. Dotbot pipeline'ı bu scripti "Open PR" task'ı için çağırır.
 
 ```
-1. kickstart-prompt.txt'ten issue number oku
+1. workflow-launch-prompt.txt'ten issue number oku
 2. workflow manifest'ten shared_branch şablonunu çöz
 3. settings.default.json'dan base branch + PR label oku
 4. `gh pr list --head $sharedBranch` ile mevcut PR kontrol et (idempotent)

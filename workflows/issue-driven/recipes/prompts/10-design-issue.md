@@ -16,7 +16,7 @@ This prompt runs ONLY after `98-analyse-task.md` has completed. The separation i
 
 - `task.status == "analysed"` — analysis phase finished successfully
 - `task.analysis.skipped` is not `true` — if the analysis marked the task skipped (e.g. missing `needs-design` label), honor it via `task_mark_done` with the skip reason
-- `task.analysis.issue_number` exists — resolved from `kickstart-prompt.txt` during analysis
+- `task.analysis.issue_number` exists — resolved from `workflow-launch-prompt.txt` during analysis
 - `task.analysis.design_plan` exists — the agreed approach, files, data changes, edge cases
 - For every entry in `task.analysis.gap_report` flagged `needs_clarification`: a matching answer exists in `task.questions_resolved`
 
@@ -45,7 +45,7 @@ Call `mcp__dotbot__task_get_context({ task_id: "{{TASK_ID}}" })` and read:
 
 - `task.analysis` — the analysis object produced by 98 (entities, files, gap findings, implementation plan)
 - `task.questions_resolved` — user answers to the interview questions (clarifications on gaps)
-- `.bot/.control/launchers/kickstart-prompt.txt` — the raw user input (issue number)
+- `.bot/.control/launchers/workflow-launch-prompt.txt` — the raw user input (issue number)
 - `.bot/.control/settings.json` → `issue_driven` — repo, branch prefix, labels
 
 Resolve the issue number from the kickstart prompt. Extract the issue slug from `task.analysis` (or compute from the issue title).

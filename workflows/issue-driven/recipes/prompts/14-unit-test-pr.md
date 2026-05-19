@@ -16,7 +16,7 @@ Call `mcp__dotbot__task_get_context({ task_id: "{{TASK_ID}}" })` and read:
 
 - `task.analysis.gap_report.critical` — array of CRITICAL gap entries
 - `task.analysis.gap_report.high` — array of HIGH gap entries
-- `task.analysis.pr_number` — the linked PR number (resolved from `kickstart-prompt.txt` and `Closes #N`)
+- `task.analysis.pr_number` — the linked PR number (resolved from `workflow-launch-prompt.txt` and `Closes #N`)
 - `task.analysis.test_plan` — the planned unit tests (which classes/methods, edge cases to cover)
 - `.bot/.control/settings.json` → `issue_driven` — unit-test command, labels
 

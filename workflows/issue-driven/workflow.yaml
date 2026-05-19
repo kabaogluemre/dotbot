@@ -102,37 +102,16 @@ tasks:
   - name: "Clone Repository"
     type: prompt
     workflow: "09-clone-repository.md"
+    applicable_agents: ["clone-repository-agent"]
+    skip_analysis: false
     priority: 0
-
-  # ── Phase 1: Technical Design ────────────────────────────────────────────
-  - name: "Design Issue"
-    type: prompt
-    workflow: "10-design-issue.md"
-    applicable_agents: ["design-issue-agent"]
-    needs_interview: true
-    depends_on: ["Clone Repository"]
-    outputs:
-      - "docs/designs/issue-{input.issue_number}-*/design.md"
-    priority: 1
-
-  # ── Phase 2: Test Case Design ────────────────────────────────────────────
-  - name: "Design Test Cases"
-    type: prompt
-    workflow: "11-design-test-cases.md"
-    applicable_agents: ["design-test-cases-agent"]
-    needs_interview: true
-    optional: true
-    depends_on: ["Design Issue"]
-    outputs:
-      - "docs/designs/issue-{input.issue_number}-*/test-cases.md"
-    priority: 2
 
   # ── Phase 3: Implementation ───────────────────────────────────────────────
   - name: "Implement Issue"
     type: prompt
     workflow: "12-implement-issue.md"
     applicable_agents: ["implement-issue-agent"]
-    depends_on: ["Design Issue", "Design Test Cases"]
+    depends_on: ["Clone Repository"]
     priority: 3
 
   # ── Phase 4a: Unit Tests ──────────────────────────────────────────────────
@@ -142,15 +121,6 @@ tasks:
     applicable_agents: ["unit-test-pr-agent"]
     depends_on: ["Implement Issue"]
     priority: 4
-
-  # ── Phase 4b: Integration Tests ───────────────────────────────────────────
-  - name: "Integration Tests"
-    type: prompt
-    workflow: "15-integration-test-pr.md"
-    applicable_agents: ["integration-test-pr-agent"]
-    depends_on: ["Unit Tests"]
-    optional: true
-    priority: 5
 
   # ── Phase 5: Open PR ──────────────────────────────────────────────────────
   # Script task: runs open-pr.ps1 which calls `gh pr create` for the shared

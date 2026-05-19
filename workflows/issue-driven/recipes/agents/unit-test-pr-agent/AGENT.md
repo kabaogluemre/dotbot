@@ -25,7 +25,7 @@ Loaded as the `APPLICABLE_AGENTS` persona for BOTH dotbot phases:
 
 ### Phase 1 — Analysis (`98-analyse-task.md`)
 
-- Resolve target: input from `kickstart-prompt.txt` may be an issue or PR number. If issue, find linked PR via `mcp__github__list_pull_requests`.
+- Resolve target: input from `workflow-launch-prompt.txt` may be an issue or PR number. If issue, find linked PR via `mcp__github__list_pull_requests`.
 - Read PR diff (`mcp__github__list_pull_request_files`), linked issue, design doc, test-cases doc, `CLAUDE.md`.
 - Verify `needs-qa` label on the issue; if missing, record "skipped" and exit.
 - Perform the **Gap Analysis** per the rules below:

@@ -33,14 +33,14 @@ $projectRoot = Split-Path -Parent $BotRoot
 $controlDir  = Join-Path $BotRoot ".control"
 
 # ── Resolve issue number from kickstart prompt ─────────────────────────────
-$promptFile  = Join-Path $controlDir "launchers\kickstart-prompt.txt"
+$promptFile  = Join-Path $controlDir "launchers\workflow-launch-prompt.txt"
 $issueNumber = $null
 if (Test-Path $promptFile) {
     $promptText  = (Get-Content $promptFile -Raw -ErrorAction SilentlyContinue).Trim()
     $issueNumber = $promptText -replace '\D', ''
 }
 if (-not $issueNumber) {
-    Write-Status "Cannot resolve issue number — kickstart-prompt.txt missing or contains no digits." -Type Error
+    Write-Status "Cannot resolve issue number — workflow-launch-prompt.txt missing or contains no digits." -Type Error
     exit 1
 }
 

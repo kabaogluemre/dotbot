@@ -25,7 +25,7 @@ Loaded as the `APPLICABLE_AGENTS` persona for BOTH dotbot phases:
 
 ### Phase 1 — Analysis (`98-analyse-task.md`)
 
-- Resolve target (issue or PR number from `kickstart-prompt.txt`).
+- Resolve target (issue or PR number from `workflow-launch-prompt.txt`).
 - Read PR diff + linked issue + design doc + **test-cases.md** (primary source for scenarios).
 - Verify `needs-integration-tests` label; if missing, record "skipped" and exit.
 - Read existing integration tests in the project — learn the patterns (base class, fixtures, collection attributes, assertion library).

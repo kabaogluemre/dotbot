@@ -28,7 +28,7 @@ When run via the task-runner, this agent is loaded as the `APPLICABLE_AGENTS` pe
 **Responsibility:** understand the issue, find gaps, get user approval. Produce an analysis object — nothing else.
 
 - Read context: issue body + comments (via `mcp__github__get_issue`), `CLAUDE.md`, `docs/INDEX.md`, `docs/architecture/`, any referenced `docs/` files, relevant source code.
-- Resolve the issue number from `.bot/.control/launchers/kickstart-prompt.txt`.
+- Resolve the issue number from `.bot/.control/launchers/workflow-launch-prompt.txt`.
 - Verify the `needs-design` label exists; if not, record `skipped: true` in the analysis and exit without writing anything.
 - Perform the **Gap Analysis** using the rules below — produce the full table (Requirements Summary, AC Check, Gaps & Concerns, Additional Notes).
 - Call `mcp__dotbot__task_mark_needs_input` with the gap-analysis table rendered in the first question's `context` (user approves or requests clarifications). This is the natural fit for dotbot's Phase 1.5 interview.

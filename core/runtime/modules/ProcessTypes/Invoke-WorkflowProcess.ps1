@@ -527,7 +527,7 @@ $sharedBranch = $null
 $workflowManifest = Get-ActiveWorkflowManifest -BotRoot $botRoot
 if ($workflowManifest -and $workflowManifest.shared_branch) {
     # Resolve {input.issue_number} from the kickstart prompt file
-    $promptFile = Join-Path $botRoot ".control\launchers\kickstart-prompt.txt"
+    $promptFile = Join-Path $botRoot ".control\launchers\workflow-launch-prompt.txt"
     $resolved = $workflowManifest.shared_branch
     if (Test-Path $promptFile) {
         $promptText = (Get-Content $promptFile -Raw -ErrorAction SilentlyContinue).Trim()

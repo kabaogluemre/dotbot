@@ -16,7 +16,7 @@ Call `mcp__dotbot__task_get_context({ task_id: "{{TASK_ID}}" })` and read:
 
 - `task.analysis` — approved Test Groups (letters, names, test-per-group counts) plus coverage matrix
 - `task.questions_resolved` — any adjustments the user made during the interview
-- `.bot/.control/launchers/kickstart-prompt.txt` — issue number
+- `.bot/.control/launchers/workflow-launch-prompt.txt` — issue number
 - `.bot/.control/settings.json` → `issue_driven` — repo, branch prefix
 
 Resolve the issue number and slug.

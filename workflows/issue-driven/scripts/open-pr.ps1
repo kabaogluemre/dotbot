@@ -22,12 +22,12 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ── Load helpers ──────────────────────────────────────────────────────────────
-Import-Module (Join-Path $BotRoot "systems\runtime\modules\DotBotTheme.psm1") -Force -DisableNameChecking
+Import-Module (Join-Path $BotRoot "core\runtime\modules\DotBotTheme.psm1") -Force -DisableNameChecking
 
 if (-not (Get-Module SettingsLoader)) {
-    Import-Module (Join-Path $BotRoot "systems\runtime\modules\SettingsLoader.psm1") -DisableNameChecking -Global
+    Import-Module (Join-Path $BotRoot "core\runtime\modules\SettingsLoader.psm1") -DisableNameChecking -Global
 }
-. (Join-Path $BotRoot "systems\runtime\modules\workflow-manifest.ps1")
+. (Join-Path $BotRoot "core\runtime\modules\workflow-manifest.ps1")
 
 $projectRoot = Split-Path -Parent $BotRoot
 $controlDir  = Join-Path $BotRoot ".control"

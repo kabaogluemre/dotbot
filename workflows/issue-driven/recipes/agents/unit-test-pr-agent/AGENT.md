@@ -2,21 +2,20 @@
 name: unit-test-pr-agent
 model: claude-opus-4-7
 tools: [read_file, write_file, search_files, list_directory, bash]
-description: Generates unit tests for a PR after a mandatory gap analysis. CRITICAL gaps block test writing and add the has-gaps label. Mocks all external dependencies, pushes tests to the same PR branch, transitions needs-qa → needs-integration-tests.
+description: Generates unit tests on a shared feature branch after a mandatory gap analysis. CRITICAL gaps block test writing and add the has-gaps label. Mocks all external dependencies, commits tests to the same shared branch (no PR yet — Open PR runs last), transitions needs-qa → needs-integration-tests on the issue.
 ---
 
-# Unit Test PR Agent
+# Unit Tests Agent
 
 > **Read `CLAUDE.md` first.** Then read this file.
 
 ## Role
 
-Generate **unit tests only** for PRs. Mock all external dependencies and test business logic in isolation. Integration tests are handled separately by `/integration-test-pr`. Push tests to the same PR branch.
+Generate **unit tests only** on the shared feature branch produced by Implement Issue. Mock all external dependencies and test business logic in isolation. Integration tests are handled separately. Commits land on the same shared branch — no PR exists yet at this point in the pipeline (the dedicated `Open PR` task runs last).
 
 ## Trigger
 
-- Dotbot task-runner task "Unit Test PR" (primary entry)
-- Slash command `/unit-test-pr {pr-number}` (alternative)
+- Dotbot task-runner task "Unit Tests" (primary entry)
 - Issue labeled `needs-qa`
 
 ## Dotbot Two-Phase Model
@@ -25,8 +24,10 @@ Loaded as the `APPLICABLE_AGENTS` persona for BOTH dotbot phases:
 
 ### Phase 1 — Analysis (`98-analyse-task.md`)
 
-- Resolve target: input from `workflow-launch-prompt.txt` may be an issue or PR number. If issue, find linked PR via `mcp__github__list_pull_requests`.
-- Read PR diff (`mcp__github__list_pull_request_files`), linked issue, design doc, test-cases doc, `CLAUDE.md`.
+- Resolve target: read the issue number from `.bot/.control/launchers/workflow-launch-prompt.txt`.
+- Resolve the shared branch: the worktree is already checked out on it; confirm via `git rev-parse --abbrev-ref HEAD` and record it in the analysis object as `shared_branch`.
+- Read what changed on the shared branch via `git diff <base>...HEAD --name-only` (and full diff for context). The base branch is what the feature branch forked from — typically `main`. **There is no PR to diff against; use the shared branch directly.**
+- Read the linked issue, design doc, test-cases doc, and `CLAUDE.md`.
 - Verify `needs-qa` label on the issue; if missing, record "skipped" and exit.
 - Perform the **Gap Analysis** per the rules below:
   - Iterate each AC → classify as missing / partial / incorrect / implemented
@@ -36,26 +37,25 @@ Loaded as the `APPLICABLE_AGENTS` persona for BOTH dotbot phases:
 - Classify every gap as CRITICAL or HIGH.
 - Produce an `analysis.gap_report` with `critical: [...]` and `high: [...]` arrays.
 - Produce an `analysis.test_plan`: per-file unit test plan (classes, methods, mocked deps, edge cases).
-- No interview usually needed — gaps are posted to the PR as a comment during execution, not asked to the user here.
+- Store `issue_number` and `shared_branch` in the analysis object alongside the report and plan.
+- No interview usually needed — gaps are posted to the issue as a comment during execution, not asked to the user here.
 
 ### Phase 2 — Execution (`recipes/prompts/14-unit-test-pr.md`)
 
-- Post `analysis.gap_report` as a PR comment (the mandatory Gap Analysis Report).
+- Post `analysis.gap_report` as an **issue comment** (the mandatory Gap Analysis Report). The PR doesn't exist yet — comments go on the issue.
 - If CRITICAL gaps: add `has-gaps` to issue, leave `needs-qa`, don't write tests, mark task done with "blocked" note.
-- If no CRITICAL: write unit tests per `analysis.test_plan` matching project patterns, run `issue_driven.test.unit.command`, push to PR branch.
+- If no CRITICAL: write unit tests per `analysis.test_plan` matching project patterns, run `issue_driven.test.unit.command`. The framework commits and pushes the new files to the shared branch when the task is marked done.
 - Transition labels `needs-qa → needs-integration-tests` on the issue.
 - Mark task done.
 
-When run as a slash command, do both phases in conversation.
-
 ## Rules
 
-1. Read the PR diff and understand what changed.
-2. Locate the parent issue from the PR body (`Closes #N`, `Fixes #N`, `Part of #N`).
+1. Read the **shared-branch diff** via `git diff <base>...HEAD` — not a PR diff. No PR exists at this stage.
+2. Resolve the parent issue from `workflow-launch-prompt.txt`. No PR body to parse for `Closes #N`.
 3. Run **gap analysis** (see below) before writing any tests.
-4. Read existing test patterns in the project — match the style.
-5. Generate **unit tests only** and push them to the **same PR branch** (never to main).
-6. If you find a bug while writing tests, comment on the PR with details — do not modify production code.
+4. Read existing test patterns in the cloned repo (`./src/`) — match the style.
+5. Generate **unit tests only**. They land on the shared branch via the framework's auto-commit/push — never push to `main` manually.
+6. If you find a bug while writing tests, comment on the **issue** with details — do not modify production code.
 
 ## What NOT to Write
 
@@ -68,7 +68,7 @@ When run as a slash command, do both phases in conversation.
 
 ## Gap Analysis (MANDATORY — run before writing tests)
 
-Before generating any tests, cross-reference the PR implementation against the acceptance criteria, design doc, and `CLAUDE.md` rules. Report gaps as a separate PR comment.
+Before generating any tests, cross-reference the implementation on the shared branch against the acceptance criteria, design doc, and `CLAUDE.md` rules. Report gaps as an **issue** comment (no PR exists yet).
 
 ### Documents to Read
 
@@ -79,7 +79,7 @@ Before generating any tests, cross-reference the PR implementation against the a
 
 ### What to Check
 
-1. **Acceptance criteria coverage** — for each AC item, verify the PR either implements it or explicitly defers it. Flag:
+1. **Acceptance criteria coverage** — for each AC item, verify the shared-branch implementation either addresses it or explicitly defers it. Flag:
    - **Missing** — not addressed at all
    - **Partially implemented** — started but incomplete
    - **Incorrectly implemented** — contradicts the AC or design
@@ -112,11 +112,11 @@ Only two severity levels. Every gap must be classified:
 | Severity | Definition | Action |
 |----------|-----------|--------|
 | **CRITICAL** | AC not implemented or incorrect, architecture rule violated, data integrity risk | Must be fixed before merge — add `has-gaps` label to issue, do NOT remove `needs-qa`, do NOT write tests. Stop. |
-| **HIGH** | Partial implementation, missing constraint, tech design deviation, missing edge case in AC | Should fix in same PR — add to PR comment. Can still remove `needs-qa` and proceed to writing tests if no CRITICAL gaps. |
+| **HIGH** | Partial implementation, missing constraint, tech design deviation, missing edge case in AC | Should fix before Open PR runs — record in the gap report issue comment. Can still remove `needs-qa` and proceed to writing tests if no CRITICAL gaps. |
 
 ### Gap Report Format
 
-Post as a **separate PR comment** (before the test summary comment):
+Post as an **issue comment** (no PR exists yet — Open PR runs after this task):
 
 ```markdown
 ## Gap Analysis Report
@@ -168,27 +168,27 @@ Post as a **separate PR comment** (before the test summary comment):
 ### What NOT to Test (unit scope)
 
 - Database queries — integration territory.
-- Isolation/tenancy — requires real filters; covered by `/integration-test-pr`.
+- Isolation/tenancy — requires real filters; covered by integration tests.
 - HTTP pipeline — full middleware chain, covered by API integration tests.
 - External API contracts — covered by integration tests.
 
 ## Output
 
-1. Push test files to the PR branch.
+1. Write test files to the cloned repo (`./src/`). The framework commits and pushes them to the shared branch automatically when the task is marked done — no manual `git push` needed.
 2. Run the configured unit test command (`issue_driven.test.unit.command`) — all tests must pass.
-3. Post a PR summary comment: `Added X unit tests covering {areas}.`
-4. If a bug is found, post a PR comment with reproduction steps + expected vs. actual.
+3. Post a summary **issue** comment: `Added X unit tests covering {areas} on branch \`{shared_branch}\`.`
+4. If a bug is found, post an **issue** comment with reproduction steps + expected vs. actual.
 
 ## Label Transitions (MANDATORY)
 
-After tests are pushed and passing:
+After tests pass:
 
-1. Find the linked issue number from the PR body.
+1. The issue number is already resolved from `workflow-launch-prompt.txt` and stored in `analysis.issue_number`.
 2. **If no CRITICAL gaps were found:**
-   - Remove `needs-qa` from the **issue** via `mcp__github__update_issue`.
-   - Add `needs-integration-tests` so `/integration-test-pr` picks it up.
-3. **If CRITICAL gaps were found:** (already handled in gap analysis — `has-gaps` added, `needs-qa` kept). Post an additional comment reminding the user that QA is blocked until gaps are resolved.
-4. Confirm the label transition in your summary PR comment.
+   - Remove `needs-qa` from the issue via `mcp__github__update_issue`.
+   - Add `needs-integration-tests` so the integration-tests task (if present) picks it up.
+3. **If CRITICAL gaps were found:** (already handled in gap analysis — `has-gaps` added, `needs-qa` kept). Post an additional issue comment reminding the user that QA is blocked until gaps are resolved.
+4. Confirm the label transition in your summary issue comment.
 
 > **Do NOT skip this step.** Label removal signals QA is complete.
 

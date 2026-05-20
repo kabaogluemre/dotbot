@@ -84,13 +84,16 @@ form:
 #
 # Dependency chain:
 #   Clone Repository
-#     └─ Design Issue
-#          └─ Design Test Cases
-#               └─ Implement Issue
-#                    └─ Unit Tests
-#                         └─ Integration Tests  (optional, runs after unit tests)
+#     └─ Implement Issue       (writes code on the shared feature branch)
+#          └─ Unit Tests        (adds tests on top of the same branch)
+#               └─ Open PR       (opens the PR for the shared branch — last)
 #
-# All tasks share the pipeline branch (feature/issue-{N}).
+# All tasks share the pipeline branch (feature/issue-{N}); the framework
+# commits and pushes the worktree to that branch after every task. No PR
+# exists until the final Open PR step — earlier tasks talk to the issue
+# (not the PR) for status/labels and read the shared branch via git diff
+# for context on what changed.
+#
 # Analysis phase: 98-analyse-task.md + applicable_agents persona
 # Execution phase: the numbered prompt in recipes/prompts/
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,6 +110,9 @@ tasks:
     priority: 0
 
   # ── Phase 3: Implementation ───────────────────────────────────────────────
+  # Writes production code and adds the needs-qa label. Does NOT open a PR —
+  # the framework commits/pushes the shared branch automatically and the
+  # dedicated Open PR task at the end of the pipeline creates the PR.
   - name: "Implement Issue"
     type: prompt
     workflow: "12-implement-issue.md"
@@ -114,7 +120,10 @@ tasks:
     depends_on: ["Clone Repository"]
     priority: 3
 
-  # ── Phase 4a: Unit Tests ──────────────────────────────────────────────────
+  # ── Phase 4: Unit Tests ───────────────────────────────────────────────────
+  # Reads what Implement Issue wrote via git diff on the shared branch,
+  # produces a gap analysis as an issue comment, and writes unit tests onto
+  # the same branch. No PR exists yet at this point.
   - name: "Unit Tests"
     type: prompt
     workflow: "14-unit-test-pr.md"
@@ -124,9 +133,10 @@ tasks:
 
   # ── Phase 5: Open PR ──────────────────────────────────────────────────────
   # Script task: runs open-pr.ps1 which calls `gh pr create` for the shared
-  # feature branch. Depends on all test phases so it runs last.
+  # feature branch. Runs LAST so the PR opens with code + tests already on
+  # the branch.
   - name: "Open PR"
     type: script
     script_path: "scripts/open-pr.ps1"
-    depends_on: ["Unit Tests", "Integration Tests"]
-    priority: 6
+    depends_on: ["Unit Tests"]
+    priority: 5

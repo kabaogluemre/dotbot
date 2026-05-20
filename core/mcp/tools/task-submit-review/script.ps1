@@ -161,24 +161,82 @@ function Invoke-TaskSubmitReview {
 
     # Merge the task worktree to main BEFORE transitioning to done.
     # If the merge fails the task stays in needs-review so the operator can retry.
+    #
+    # Shared-branch mode (e.g. issue-driven workflow with shared_branch:
+    # feature/issue-{N}) is different: the task branch stays alive across
+    # multiple tasks and is integrated via PR at the end, not by squash-merging
+    # into main. For those tasks we commit + push to the shared branch instead.
     $botRoot = Join-Path $projectRoot ".bot"
     try {
         if (-not (Get-Module WorktreeManager)) {
             Import-Module (Join-Path $botRoot "core/runtime/modules/WorktreeManager.psm1") -DisableNameChecking -Global
         }
-        $mergeResult = Complete-TaskWorktree -TaskId $taskId -ProjectRoot $projectRoot -BotRoot $botRoot
-        if (-not $mergeResult.success) {
-            $mergeError = "merge failed: $($mergeResult.message)"
-            Write-BotLog -Level Warn -Message "Review approval: $mergeError for task $taskId — task stays in needs-review"
-            return @{
-                success        = $false
-                error          = $mergeError
-                message        = "Review approval blocked — $mergeError. Task stays in needs-review."
-                task_id        = $taskId
-                current_status = 'needs-review'
+
+        $wtInfo = Get-TaskWorktreeInfo -TaskId $taskId -BotRoot $botRoot
+        $isSharedBranch = [bool]($wtInfo -and $wtInfo.shared_branch)
+
+        if ($isSharedBranch) {
+            $worktreePath = $wtInfo.worktree_path
+            $sharedBranch = $wtInfo.branch_name
+            if (-not $worktreePath -or -not (Test-Path $worktreePath)) {
+                $mergeError = "shared-branch task has no live worktree (path: $worktreePath)"
+                Write-BotLog -Level Warn -Message "Review approval: $mergeError for task $taskId — task stays in needs-review"
+                return @{
+                    success        = $false
+                    error          = $mergeError
+                    message        = "Review approval blocked — $mergeError. Task stays in needs-review."
+                    task_id        = $taskId
+                    current_status = 'needs-review'
+                }
             }
+
+            $safeTaskName = $taskContent.name -replace '[^\w\s-]', '' -replace '\s+', '-'
+            $commitMsg = "task: $safeTaskName [skip ci]"
+            git -C $worktreePath add -A 2>&1 | Out-Null
+            $gitCommitOutput = git -C $worktreePath commit -m $commitMsg 2>&1
+            $gitCommitExit   = $LASTEXITCODE
+            $nothingToCommit = ($gitCommitOutput -join ' ') -match 'nothing to commit'
+            if ($gitCommitExit -ne 0 -and -not $nothingToCommit) {
+                $mergeError = "shared-branch commit failed: $($gitCommitOutput -join ' ')"
+                Write-BotLog -Level Warn -Message "Review approval: $mergeError for task $taskId — task stays in needs-review"
+                return @{
+                    success        = $false
+                    error          = $mergeError
+                    message        = "Review approval blocked — $mergeError. Task stays in needs-review."
+                    task_id        = $taskId
+                    current_status = 'needs-review'
+                }
+            }
+
+            $gitPushOutput = git -C $worktreePath push --set-upstream origin $sharedBranch 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                $mergeError = "shared-branch push failed for '$sharedBranch': $($gitPushOutput -join ' ')"
+                Write-BotLog -Level Warn -Message "Review approval: $mergeError for task $taskId — task stays in needs-review"
+                return @{
+                    success        = $false
+                    error          = $mergeError
+                    message        = "Review approval blocked — $mergeError. Task stays in needs-review."
+                    task_id        = $taskId
+                    current_status = 'needs-review'
+                }
+            }
+
+            Write-BotLog -Level Info -Message "Review approval (shared branch): committed and pushed task $taskId to $sharedBranch"
+        } else {
+            $mergeResult = Complete-TaskWorktree -TaskId $taskId -ProjectRoot $projectRoot -BotRoot $botRoot
+            if (-not $mergeResult.success) {
+                $mergeError = "merge failed: $($mergeResult.message)"
+                Write-BotLog -Level Warn -Message "Review approval: $mergeError for task $taskId — task stays in needs-review"
+                return @{
+                    success        = $false
+                    error          = $mergeError
+                    message        = "Review approval blocked — $mergeError. Task stays in needs-review."
+                    task_id        = $taskId
+                    current_status = 'needs-review'
+                }
+            }
+            Write-BotLog -Level Info -Message "Review approval: merged worktree for task $taskId — $($mergeResult.message)"
         }
-        Write-BotLog -Level Info -Message "Review approval: merged worktree for task $taskId — $($mergeResult.message)"
     } catch {
         $mergeError = "merge failed: $($_.Exception.Message)"
         Write-BotLog -Level Warn -Message "Review approval: $mergeError for task $taskId — task stays in needs-review" -Exception $_

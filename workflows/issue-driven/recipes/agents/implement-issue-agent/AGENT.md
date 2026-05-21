@@ -25,12 +25,23 @@ Loaded as the `APPLICABLE_AGENTS` persona for BOTH dotbot phases:
 
 ### Phase 1 — Analysis (`98-analyse-task.md`)
 
-- Read the issue + the `✅ Technical Design Complete` comment; read the design doc fully.
-- Verify the `ready` label; if missing, record "skipped" and exit.
+**Step 0 — Resolve issue number (MANDATORY first step):**
+The task description may be empty — that is expected for this workflow. The issue number lives in the launch prompt, not the task fields.
+
+1. Read `.bot/.control/launchers/workflow-launch-prompt.txt`.
+2. Extract the issue number using these forms (in order of preference):
+   - GitHub issue URL: `https://github.com/{owner}/{repo}/issues/{N}` → use `{N}` and derive `owner`/`repo`
+   - `owner/repo {N}` or `owner/repo #{N}` → use `{N}`
+   - Bare integer or `#{N}` anywhere in the text → use `{N}`
+3. If no issue number is found, call `task_mark_needs_input` asking the user to supply it. Do not proceed without it.
+4. Store `issue_number`, `owner`, `repo` — these drive every subsequent step.
+
+- Read the issue via `mcp__github__get_issue` + the `✅ Technical Design Complete` comment; read the design doc fully.
+- Verify the `ready` label; if missing, record `skipped: true` in the analysis and exit via `task_mark_analysed`.
 - Read source under the project's source root — identify files to modify (`files.to_modify`), reference patterns to mirror (`files.patterns_from`), and existing utilities to reuse.
 - Produce an `implementation` plan: ordered list of changes, per-file rationale, which helpers/extensions to reuse.
 - Only call `task_mark_needs_input` if the design has genuine ambiguities that need user resolution (use Phase 8 "spontaneous clarifying question" style). Otherwise no interview.
-- Store the analysis object with `implementation`, `files`, and any resolved clarifications.
+- Store the analysis object with `issue_number`, `implementation`, `files`, and any resolved clarifications.
 
 ### Phase 2 — Execution (`recipes/prompts/12-implement-issue.md`)
 

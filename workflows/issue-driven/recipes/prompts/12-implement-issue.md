@@ -18,10 +18,17 @@ Call `mcp__dotbot__task_get_context({ task_id: "{{TASK_ID}}" })` and read:
 - `task.analysis.files.patterns_from` — reference implementations to mirror
 - `task.analysis.implementation` — the implementation steps
 - `task.questions_resolved` — any user decisions on implementation ambiguities
-- `.bot/.control/launchers/workflow-launch-prompt.txt` — issue number
 - `.bot/.control/settings.json` → `issue_driven` — build command, branch prefix, labels
 
-Resolve issue number and slug.
+**Resolve the issue number** from `.bot/.control/launchers/workflow-launch-prompt.txt`:
+
+1. Read the file contents.
+2. Extract the issue number by matching these forms (in order of preference):
+   - GitHub issue URL: `https://github.com/{owner}/{repo}/issues/{N}` → use `{N}`
+   - `owner/repo {N}` or `owner/repo #{N}` → use `{N}`
+   - Bare integer or `#{N}` anywhere in the text → use `{N}`
+3. If the analysis object already has `task.analysis.issue_number`, prefer that and use the file as a fallback only.
+4. If no issue number can be resolved from either source, call `task_mark_failed` with a message explaining the launch prompt format that was found.
 
 ## Step 2 — Pre-flight Skip Check
 

@@ -1,27 +1,31 @@
 # dotbot core — engine gaps & hardening candidates
 
 **Status:** Draft proposal — pending, not yet filed as issues
-**Verified against:** `main` @ `793a535` (code-level sweep of `core/`, `scripts/`, `workflows/`)
+**Verified against:** `main` @ `9dce2f4` (code-level sweep of `core/`, `scripts/`, `workflows/`)
 **Audience:** dotbot maintainers
 
 ---
 
 ## What this is
 
-While building two real-world workflows on top of dotbot — one that **authors documents** (reports/specs published to an external system) rather than source code, and one that **leans heavily on an external HTTP MCP server** with expiring auth — we hit a set of limitations that are *not* specific to those workflows. They are general dotbot-engine gaps that any of the following would also hit:
+While building real-world workflows on top of dotbot — one that **leans heavily on an external HTTP MCP server** with expiring auth and re-runs to refine prior output, and one that drives a **multi-stage test-execution / automation pipeline** (branch on a runtime result, loop back to an earlier stage after a fix, push to repos other than the project repo) — we hit a set of limitations that are *not* specific to those workflows. They are general dotbot-engine gaps that any of the following would also hit:
 
-- any workflow whose primary output is **markdown/documents** rather than code (dotbot already ships one — `start-from-jira`, with its `researcher`/`documenter` agents and research-mode prompt);
-- any workflow that **re-runs a task to refine its previous output** (e.g. after a review rejection) instead of regenerating from scratch;
+- any workflow that **re-runs a task or a whole pipeline to refine its previous output** (e.g. after a review rejection) instead of regenerating from scratch;
 - any workflow that depends on an **external MCP server with OAuth/refresh-token auth** that can expire mid-run;
-- any package that wants to **ship reusable slash commands** to the IDE, the same way it already ships agents and skills;
-- any workflow that, after completion, must be re-run to **update its already-published outputs** (whole-pipeline modification) rather than regenerate everything from scratch.
+- any **review-gated** workflow whose reviewers need to be told when work is waiting;
+- any workflow whose shape is **not a simple forward DAG** — it loops back to an earlier phase, or branches on a value produced at runtime;
+- any workflow where **each step is fed by the previous step's output** and a malformed/stale/empty upstream artifact should fail fast rather than silently degrade;
+- any workflow with **semantic preconditions** that a presence-only preflight cannot express;
+- any workflow that spans **more than one git repository**, integrates via **pull requests**, or targets an **integration branch other than `main`/`master`**;
+- any workflow step that must **invoke an external (non-Claude) job** — a CI run, an existing test runner — and await/ingest its result.
 
 Each item below is written to stand on its own as a candidate GitHub issue: observed behaviour with code references, why it matters in general terms, a non-prescriptive proposed direction, and acceptance criteria. Workflow-specific content (the actual agents, prompts, integrations) is **out of scope** here — these are only the engine-level enablers.
 
 Several of these are natural extensions of patterns dotbot already has:
-- Issue 5 extends the org-quota → needs-input park added in #391/#402 to a second trigger class.
-- Issue 2 promotes the hand-rolled "research execution mode" in `start-from-jira` into a first-class mode.
-- Issue 6 adds a third artifact type alongside the agents/skills that `core/init.ps1` already deploys to IDEs.
+- Issue 3 extends the org-quota → needs-input park added in #391/#402 to a second trigger class.
+- Issues 8 and 9 extend the existing forward task-DAG with cyclic flow and runtime-value branching.
+- Issue 11 generalises the presence-only preflight (Issue 2) into a custom/content-aware check surface.
+- Issue 13 promotes the multi-repo / cross-repo theme — previously folded into the PR issue — to a first-class concern.
 
 ---
 
@@ -29,102 +33,37 @@ Several of these are natural extensions of patterns dotbot already has:
 
 | # | Title | Type | Area | Size |
 |---|-------|------|------|------|
-| 1 | Non-code task output is squash-merged into the code branch (no output-disposition guard) | Bug | runtime / worktree | S–M |
-| 2 | No first-class "document / non-code task" mode (code framing + unsafe defaults per task) | Enhancement | runtime / prompts | S–M |
-| 3 | Re-run regenerates from scratch — no partial / in-place regeneration of prior output | Enhancement | runtime / task + workflow rerun | L |
-| 4 | MCP-server preflight is presence-only — a dead/unauthenticated server passes | Bug | ui / preflight | S |
-| 5 | External-MCP auth expiry wedges silently mid-run; `AuthLimit` classification is dead code | Bug | runtime / failure handling | M |
-| 6 | `init` deploys agents and skills to IDEs but not slash commands | Enhancement | init / IDE artifacts | M |
-| 7 | No workflow-level *modification* re-run mode — whole-workflow rerun is fresh-from-scratch only (workflow-scoped Issue 3) | Enhancement | runtime / workflow rerun | L–XL |
-| 8 | Tasks entering `needs-review` emit no notification (only `needs-input` notifies) | Enhancement | runtime / notifications | S |
-| 9 | Integration/base branch is hard-coded to `main`/`master` — not configurable | Enhancement | runtime / worktree + git | S–M |
-| 10 | No first-class PR-based integration; core only direct-merges, PR creation reinvented per workflow | Enhancement | runtime / git integration | M–L |
-| 11 | Workflow execution is a strictly forward DAG — no back-edge / loop to an earlier phase on review reject or failure | Enhancement | runtime / control flow | XL |
-| 12 | No runtime-value branching — `condition` is path-existence only; cannot route on a prior task's output value | Enhancement | runtime / control flow | M–L |
-| 13 | No consumer-entry input contract — tasks have no `inputs:` declaration and no artifact pre-check before execution | Enhancement | runtime / task contract | M–L |
-| 14 | Preflight is fixed and presence-only — no custom-script and no LLM-driven check support (core change) | Enhancement | runtime / preflight | M |
-| 15 | No on-demand external task/workflow trigger that feeds evidence into an in-flight task | Enhancement | runtime / task IO + orchestration | M–L |
-| 16 | Multi-repo / cross-repo targets are not a first-class engine concept — engine is locked to one project repo | Enhancement | runtime / git + worktree + settings | L–XL |
-| 17 | No external (non-Claude) job invocation + await/ingest primitive — only synchronous local scripts | Enhancement | runtime / process types | M |
+| 1 | Re-run regenerates from scratch — no partial / in-place regeneration of prior output (task level) | Enhancement | runtime / task + workflow rerun | L |
+| 2 | MCP-server preflight is presence-only — a dead/unauthenticated server passes | Bug | ui / preflight | S |
+| 3 | External-MCP auth expiry wedges silently mid-run; `AuthLimit` classification is dead code | Bug | runtime / failure handling | M |
+| 4 | No workflow-level *modification* re-run mode — whole-workflow rerun is fresh-from-scratch only | Enhancement | runtime / workflow rerun | L–XL |
+| 5 | Tasks entering `needs-review` emit no notification (only `needs-input` notifies) | Enhancement | runtime / notifications | S |
+| 6 | Integration/base branch is hard-coded to `main`/`master` — not configurable | Enhancement | runtime / worktree + git | S–M |
+| 7 | No first-class PR-based integration; core only direct-merges, PR creation reinvented per workflow | Enhancement | runtime / git integration | M–L |
+| 8 | Workflow execution is a strictly forward DAG — no back-edge / loop to an earlier phase on review reject or failure | Enhancement | runtime / control flow | XL |
+| 9 | No runtime-value branching — `condition` is path-existence only; cannot route on a prior task's output value | Enhancement | runtime / control flow | M–L |
+| 10 | No consumer-entry input contract — tasks have no `inputs:` declaration and no artifact pre-check before execution | Enhancement | runtime / task contract | M–L |
+| 11 | Preflight is fixed and presence-only — no custom-script and no LLM-driven check support (core change) | Enhancement | runtime / preflight | M |
+| 12 | No on-demand external task/workflow trigger that feeds evidence into an in-flight task | Enhancement | runtime / task IO + orchestration | M–L |
+| 13 | Multi-repo / cross-repo targets are not a first-class engine concept — engine is locked to one project repo | Enhancement | runtime / git + worktree + settings | L–XL |
+| 14 | No external (non-Claude) job invocation + await/ingest primitive — only synchronous local scripts | Enhancement | runtime / process types | M |
 
 ---
 
-## Issue 1 — Non-code task output is squash-merged into the code branch
-
-**Type:** Bug · **Area:** runtime / worktree · **Size:** S–M
-
-### Summary
-A task whose output is **not source code** (markdown reports, generated docs, analysis artifacts) has no supported way to keep that output *off* the code branch. When such a task runs inside a worktree, its `workspace/product/*` artifacts are committed to the task branch and carried through the squash-merge into the base branch. Additionally, because `workspace/product/` is a junction into shared state, agent writes are not actually isolated to the worktree.
-
-### Current behaviour
-- `workspace/product/` inside a worktree is a **directory junction/symlink to the main repo's shared `workspace/product/`** — so any write inside the worktree lands directly in shared state, not in an isolated copy: `core/runtime/modules/WorktreeManager.psm1:565-578` (`New-DirectoryLink`).
-- On a `task/*` branch, the bot-state commit step excludes only `workspace/tasks/`, **not** `workspace/product/` — so `product/*` is staged and committed to the task branch: `core/hooks/scripts/commit-bot-state.ps1:29-34`.
-- At completion, `Complete-TaskWorktree` backs up and restores only the `tasks/` state directories across the squash-merge; `product/` is reset pre-merge but **not** restored, so `product/` changes flow into the merge commit on the base branch: `core/runtime/modules/WorktreeManager.psm1:693-764`.
-
-Net effect: a document-authoring task leaks its artifacts into the code branch's history, and its "isolated" writes aren't isolated.
-
-### Why it matters
-dotbot already ships a document-producing workflow (`start-from-jira`), and any workflow that generates reports/specs/analysis as its deliverable will hit this. For these, the markdown is meant to be *published elsewhere* (or simply discarded after handoff), not merged into the product's source tree. There is currently no declarative "this output is not source code — keep it off the code branch" concept.
-
-### Proposed direction (non-prescriptive)
-One or more of:
-- A per-task / per-workflow **output disposition** declaration (e.g. `output_target: none|branch|external`) that, when set to non-branch, gitignores or excludes the declared output paths from the task-branch commit and the squash-merge.
-- Discard the worktree without merging when a task declares it produces no source-code changes.
-- Decide whether `workspace/product/` should be a real isolated copy in worktrees rather than a junction (or document the junction behaviour as intentional and add the guard above on top).
-
-Related to Issue 2 (the unsafe defaults that cause document tasks to get a worktree in the first place).
-
-### Acceptance criteria
-- [ ] A task can declare that its output is not source code, and that output never appears in the base-branch history after completion.
-- [ ] Writes from such a task do not silently mutate shared `workspace/product/` outside the task's lifecycle (or this is explicitly documented as intended).
-- [ ] Existing code-task behaviour is unchanged.
-
----
-
-## Issue 2 — No first-class "document / non-code task" mode
-
-**Type:** Enhancement · **Area:** runtime / prompts · **Size:** S–M
-
-### Summary
-The framework's execution prompts assume a code-implementation framing, and a `type: prompt` task defaults to getting both an analysis phase and a worktree. Authoring a document-only task therefore requires hand-wiring several flags plus a custom prompt template on every task. There is no packaged "document mode" — and one workflow has already had to roll its own.
-
-### Current behaviour
-- The core execution prompt is code-centric: TDD guidance, incremental commits, dependency-lockfile handling, "start with `files.to_modify`": `core/prompts/99-autonomous-task.md:134-155`, `:125`. The analysis prompt is framed as preparing a code implementation: `core/prompts/98-analyse-task.md:72`.
-- For `type: prompt` tasks, both `skip_analysis` and `skip_worktree` **default to `false`** — i.e. a prompt task gets analysis + a worktree unless each flag is explicitly overridden: `core/runtime/modules/workflow-manifest.ps1:586-587`.
-- A `type: prompt_template` override exists to swap the execution prompt per task: `core/runtime/modules/ProcessTypes/Invoke-WorkflowProcess.ps1:818-833`. It works, but it's per-task plumbing, not a mode.
-- `start-from-jira` has already hand-rolled a "research execution mode" by dispatching on `analysis.mode == "research"` inside its own copy of the 99 prompt: `workflows/start-from-jira/recipes/prompts/99-autonomous-task.md:84-101`. This is exactly the gap — the pattern exists but is reinvented per workflow.
-
-### Why it matters
-Document-authoring is a recurring use case (already in-tree). Today each such task is a footgun: forget to set `skip_worktree`/`skip_analysis` and you get a worktree you don't want (see Issue 1) and a code-framed prompt steering a non-code task. The behaviour ends up depending on three independent knobs being set correctly by hand.
-
-### Proposed direction (non-prescriptive)
-- A first-class mode (e.g. `type: document` or `mode: doc`) that bundles safe defaults (skip the worktree and/or code-analysis phase as appropriate) and a document-framed execution prompt, so workflows stop reinventing the `start-from-jira` research branch.
-- Alternatively, promote the existing research-mode dispatch into the core 98/99 prompts behind a documented analysis-mode flag.
-
-### Acceptance criteria
-- [ ] A workflow can declare a document/non-code task in one place and get sensible defaults without per-task flag wiring.
-- [ ] The execution prompt presented to such a task is not code-framed.
-- [ ] `start-from-jira`'s research mode can be expressed via the new mode (or the mode is shown to subsume it).
-
----
-
-## Issue 3 — Re-run regenerates from scratch — no partial / in-place regeneration of prior output
+## Issue 1 — Re-run regenerates from scratch — no partial / in-place regeneration of prior output (task level)
 
 **Type:** Enhancement · **Area:** runtime / task + workflow rerun · **Size:** L
 
 ### Summary
-When a task *or* a workflow is re-run, the prior output is not available as an **editable base** — both levels regenerate from scratch (the task from an empty worktree, the workflow from the static manifest). There is no way to regenerate only the changed sections (partial / delta). Reviewer feedback is already handled well; what is missing is *retaining the prior artifact and editing on top of it*.
+When a task is re-run, the prior output is not available as an **editable base** — it regenerates from an empty worktree. There is no way to regenerate only the changed sections (partial / delta). Reviewer feedback is already handled well; what is missing is *retaining the prior artifact and editing on top of it*.
 
 ### Current behaviour
-- **Feedback handling — already works (do not rebuild this):** on rejection a `comment` is mandatory and `reviewer_feedback` is accumulated across cycles (`core/mcp/tools/task-submit-review/script.ps1:41-57`), then injected into **both** `core/prompts/98-analyse-task.md` and `core/prompts/99-autonomous-task.md` via the `{{REVIEWER_FEEDBACK}}` placeholder, under a "you MUST address ALL of the following feedback" heading (`core/runtime/modules/prompt-builder.ps1:141-155`).
-- **Task level:** on reject, `Reset-TaskWorktree` removes the worktree and branch, the task returns to `todo`, and execution-phase fields are cleared — the next cycle starts in an empty worktree (`core/mcp/tools/task-submit-review/script.ps1:64-82`, `core/runtime/modules/WorktreeManager.psm1:941-952`). The prior draft files are gone.
-- **Workflow level:** `workflow-run.ps1` rerun supports only `fresh` (clear existing tasks + recreate from the manifest) or `append`; neither feeds the prior canonical output back as input (`scripts/workflow-run.ps1:83-134`).
+- **Feedback handling — already works (do not rebuild this):** on rejection a `comment` is mandatory and `reviewer_feedback` is accumulated across cycles (`core/mcp/tools/task-submit-review/script.ps1:40-57`), then injected into **both** `core/prompts/98-analyse-task.md` (`{{REVIEWER_FEEDBACK}}` at `:57`) and `core/prompts/99-autonomous-task.md` (`:77`) via `core/runtime/modules/prompt-builder.ps1:141-155`, under a "you MUST address ALL of the following feedback" heading.
+- **Task level:** on reject, the task's execution-phase fields are cleared, the task returns to `todo`, and `Reset-TaskWorktree` removes the worktree and branch — the next cycle starts in an empty worktree (`core/mcp/tools/task-submit-review/script.ps1:59-86`; `Reset-TaskWorktree` at `core/runtime/modules/WorktreeManager.psm1:904-970`, worktree removal `:941`, branch delete `:952`). The prior draft files are gone.
 - Output is validated only by file existence / count (`Test-TaskOutput`, `core/runtime/modules/ProcessTypes/Invoke-WorkflowProcess.ps1:131-190`); there is no content-level diff / patch / partial-update primitive (only git merge-conflict handling exists).
 
 ### Why it matters
-For any workflow producing a large or structured artifact that evolves over time, regenerating from scratch is both wasteful and risky: the whole thing is rewritten when only one section changed, and stable internal structure that was not explicitly captured (internal IDs, section ordering) can drift. Feedback is already fed back in — the missing piece is partial regeneration on top of the retained prior output.
-
-This also settles what happens when a workflow is re-triggered (manually today, or programmatically per Issue 7): it **regenerates from scratch** — `workflow-run.ps1` `fresh` wipes and recreates the tasks from the manifest — so re-running an upstream stage after a downstream change produces a brand-new artifact rather than a modification of the prior one. (An agent can be prompted to read the prior published artifact and re-author it, but that is recipe content and still a full re-author, not an engine-level delta with stable IDs preserved.) Modification-mode re-run is *this* issue; the trigger mechanism is Issue 7.
+For any workflow producing a large or structured artifact that evolves over time, regenerating from scratch is both wasteful and risky: the whole thing is rewritten when only one section changed, and stable internal structure that was not explicitly captured (internal IDs, section ordering) can drift. Feedback is already fed back in — the missing piece is partial regeneration on top of the retained prior output. This is the *task-level* counterpart of Issue 4 (workflow-level).
 
 ### Proposed direction (non-prescriptive)
 - On rerun, retain the prior output as editable input rather than discarding the worktree.
@@ -132,13 +71,13 @@ This also settles what happens when a workflow is re-triggered (manually today, 
 - Exploratory — the architectural shape (a separate "modify" mode, a post-pass, or in-prompt) is for maintainers to decide.
 
 ### Acceptance criteria
-- [ ] A task/workflow can be re-run with its previous output available as an editable base (not from an empty worktree / a manifest wipe).
+- [ ] A task can be re-run with its previous output available as an editable base (not from an empty worktree).
 - [ ] Only the changed parts can be regenerated, guided by the cumulative feedback.
 - [ ] The existing feedback injection is preserved.
 
 ---
 
-## Issue 4 — MCP-server preflight is presence-only
+## Issue 2 — MCP-server preflight is presence-only
 
 **Type:** Bug · **Area:** ui / preflight · **Size:** S
 
@@ -147,8 +86,8 @@ The preflight check for a required MCP server passes as long as the server *name
 
 ### Current behaviour
 - `Get-PreflightResults` resolves an `mcp_server` check by looking for the server name in `.mcp.json`, falling back to a regex match against `claude mcp list` output; `passed` is set purely on name presence: `core/ui/modules/ProductAPI.psm1:388-416`.
-- `scripts/doctor.ps1` performs only local health checks (dependencies, settings/theme JSON validity, process locks, orphaned worktrees, task-queue health, output hygiene) — it never probes external MCP reachability or auth: `scripts/doctor.ps1:65-295`.
-- dotbot is not itself an MCP client for external servers; it relies on the Claude CLI's cwd-based `.mcp.json` discovery and does not pass `--mcp-config` when spawning Claude: `core/runtime/ClaudeCLI/ClaudeCLI.psm1:480-499`, `:585-589`. So a real probe has to go through `claude mcp` or an equivalent connectivity test rather than introspecting a live client.
+- `scripts/doctor.ps1` performs only local health checks (dependencies, settings/theme JSON validity, process locks, orphaned worktrees, task-queue health, output hygiene) — it never probes external MCP reachability or auth: `scripts/doctor.ps1:64-295`.
+- dotbot is not itself an MCP client for external servers; it relies on the Claude CLI's cwd-based `.mcp.json` discovery and does not pass `--mcp-config` when spawning Claude: `core/runtime/ClaudeCLI/ClaudeCLI.psm1:480-499`, `:580-589`. So a real probe has to go through `claude mcp` or an equivalent connectivity test rather than introspecting a live client.
 
 ### Why it matters
 Any workflow that lists an external MCP server as a precondition gets false confidence from the green preflight. The failure then surfaces deep inside a run as a confusing tool error rather than up front as "this server isn't reachable / not authenticated."
@@ -163,7 +102,7 @@ Any workflow that lists an external MCP server as a precondition gets false conf
 
 ---
 
-## Issue 5 — External-MCP auth expiry wedges silently; `AuthLimit` is dead code
+## Issue 3 — External-MCP auth expiry wedges silently; `AuthLimit` is dead code
 
 **Type:** Bug · **Area:** runtime / failure handling · **Size:** M
 
@@ -171,10 +110,10 @@ Any workflow that lists an external MCP server as a precondition gets false conf
 When an external MCP server's auth expires mid-run (e.g. an OAuth/refresh token reaching its TTL), the failure is not recognised as an auth problem — it collapses into the generic recoverable retry/skip path. The failure classifier *does* produce an `AuthLimit` type, but nothing consumes it. The runtime already has a clean "park to needs-input" pattern (added for org quota in #391/#402) that this should reuse.
 
 ### Current behaviour
-- `get-failure-reason.ps1` returns `type = "AuthLimit"` for auth-flavoured patterns (`unauthorized`, etc.): `core/runtime/modules/get-failure-reason.ps1:58`.
-- The consumer only reads `.recoverable` and ignores `.type`, so `AuthLimit` never changes behaviour — it's effectively dead: `core/runtime/modules/ProcessTypes/Invoke-WorkflowProcess.ps1:1803-1811`.
+- `get-failure-reason.ps1` returns `type = "AuthLimit"` for auth-flavoured patterns (`unauthorized`, `not authenticated`, etc.): `core/runtime/modules/get-failure-reason.ps1:58` (patterns at `:43-52`).
+- The consumer reads `.type` only to compose a human-readable skip-detail string; control flow branches solely on `.recoverable`, so `AuthLimit` never changes behaviour — it's effectively dead: `core/runtime/modules/ProcessTypes/Invoke-WorkflowProcess.ps1:1803-1811` (`.type` read at `:1807`). Since `AuthLimit` always carries `recoverable = $true`, it falls into the generic retry path.
 - There is **no matcher** anywhere for "refresh token expired" / "re-authentication required" / token-TTL conditions (confirmed by repo-wide search).
-- The park-to-needs-input machinery exists and is live, but is hard-keyed to org/monthly quota only: `Move-TaskToOrgQuotaNeedsInput` in `core/runtime/modules/OrgQuotaEscalation.psm1:15-90`, invoked via `Invoke-OrgQuotaEscalationStep` at `core/runtime/modules/ProcessTypes/Invoke-WorkflowProcess.ps1:460-500`, `:1340-1346`, `:1697-1702`. The agent-driven equivalent is the `task_mark_needs_input` tool (`core/mcp/tools/task-mark-needs-input/`).
+- The park-to-needs-input machinery exists and is live, but is hard-keyed to org/monthly quota only: `Move-TaskToOrgQuotaNeedsInput` in `core/runtime/modules/OrgQuotaEscalation.psm1:15-90`, invoked via `Invoke-OrgQuotaEscalationStep` (`:460-502`) at `core/runtime/modules/ProcessTypes/Invoke-WorkflowProcess.ps1:1342`, `:1699`, both gated on `kind -eq 'org_quota'` (`:1340`, `:1697`). The agent-driven equivalent is the `task_mark_needs_input` tool (`core/mcp/tools/task-mark-needs-input/`).
 
 ### Why it matters
 External MCP servers with expiring credentials are common. Today, when the token dies mid-run, the workflow silently retries/skips instead of telling the operator to re-authenticate — the run wedges or quietly degrades. The fix is mostly *wiring*: a matcher plus a second trigger into the park pattern that #391 already established.
@@ -191,50 +130,24 @@ External MCP servers with expiring credentials are common. Today, when the token
 
 ---
 
-## Issue 6 — `init` deploys agents and skills to IDEs but not slash commands
-
-**Type:** Enhancement · **Area:** init / IDE artifacts · **Size:** M
-
-### Summary
-`core/init.ps1` deploys `agents/` and `skills/` into the IDE config directories (`.claude`, `.codex`, `.gemini`), but there is no path for deploying custom **slash commands** (`.claude/commands/` and equivalents). A package therefore cannot ship reusable, individually-triggerable IDE commands the way it ships agents and skills — the things the README calls "slash commands" are actually skills (model-invoked), not Claude Code slash commands (user-invoked).
-
-### Current behaviour
-- `core/init.ps1` resolves an agents source and a skills source and copies them to the provider IDE directories; there is no commands source or `.../commands` destination: `core/init.ps1:54-105`.
-- The README's "slash commands" (`/status`, `/verify`, …) map to entries under `core/skills/`, i.e. skills, not real slash commands.
-
-### Why it matters
-Claude Code (and peers) support user-invoked custom slash commands as a first-class artifact distinct from skills. Workflows that want to expose a set of discrete, manually-triggered steps to engineers in their IDE — rather than only model-invoked skills or a runtime-driven DAG — currently have no supported deployment channel. This is a clean third artifact type alongside the agents/skills `init` already handles.
-
-### Proposed direction (non-prescriptive)
-- Add a commands artifact type (e.g. `recipes/commands/`) and deploy it to `.claude/commands/` (and the codex/gemini equivalents) in `init.ps1`, parallel to the existing agents/skills deployment.
-- Clarify README terminology so "slash commands" vs "skills" is unambiguous.
-
-### Acceptance criteria
-- [ ] A workflow/package can ship slash commands that land in `.claude/commands/` (and equivalents) on `init`.
-- [ ] Existing agents/skills deployment is unaffected.
-- [ ] README distinguishes skills from slash commands.
-
----
-
-## Issue 7 — No workflow-level "modification" re-run mode (whole-workflow rerun is fresh-from-scratch only)
+## Issue 4 — No workflow-level "modification" re-run mode (whole-workflow rerun is fresh-from-scratch only)
 
 **Type:** Enhancement · **Area:** runtime / workflow rerun · **Size:** L–XL
 
 ### Summary
-Re-running a *whole* completed workflow has no "modification" mode. `workflow-run.ps1` supports only `fresh` (wipe all tasks and regenerate the entire pipeline from the manifest) or `append`. There is no mode in which the whole workflow re-runs against its **prior published / canonical artifacts and updates them** — applying deltas across all of the workflow's outputs and preserving continuity. This is the workflow-scoped analogue of the task-level modification re-run (Issue 3): same capability, applied to the entire pipeline rather than a single task.
+Re-running a *whole* completed workflow has no "modification" mode. `workflow-run.ps1` supports only `fresh` (wipe all tasks and regenerate the entire pipeline from the manifest) or `append`. There is no mode in which the whole workflow re-runs against its **prior published / canonical artifacts and updates them** — applying deltas across all of the workflow's outputs and preserving continuity. This is the workflow-scoped analogue of the task-level modification re-run (Issue 1): same capability, applied to the entire pipeline rather than a single task.
 
 ### Current behaviour
-- `workflow-run.ps1` rerun modes are `fresh` (default — `Clear-WorkflowTasks` removes existing tasks, then recreate from the manifest) and `append`; neither feeds the workflow's prior canonical output back as a modifiable base (`scripts/workflow-run.ps1:83-108`, default at `:85`).
+- `workflow-run.ps1` rerun modes are `fresh` (default — `Clear-WorkflowTasks` removes existing tasks, then recreate from the manifest) and `append`; neither feeds the workflow's prior canonical output back as a modifiable base (`scripts/workflow-run.ps1:83-108`, default at `:85`; `Clear-WorkflowTasks` at `core/runtime/modules/workflow-manifest.ps1:845-874`).
 - Re-running therefore regenerates every task's artifact from scratch — there is no whole-workflow "update what already exists" pass.
-- There is no first-class "workflow run" entity to re-enter or modify — the active workflow is resolved purely from `settings.workflow` (`core/runtime/modules/workflow-manifest.ps1:201-250`).
+- There is no first-class "workflow run" entity to re-enter or modify — the active workflow is resolved from `settings.workflow`, falling back to the alphabetically-first installed workflow (`Get-ActiveWorkflowManifest`, `core/runtime/modules/workflow-manifest.ps1:201-250`, fallback at `:239-247`).
 
 ### Why it matters
-When a completed workflow's inputs change, teams want to re-run the workflow to **update its already-published outputs** — not regenerate the whole pipeline from scratch and lose continuity across all its artifacts (stable IDs, unchanged sections, cross-artifact references). Today the only whole-workflow rerun is `fresh`, which discards the prior result and rebuilds. This is the workflow-level counterpart of Issue 3 and the largest item: it applies the same prior-output-as-editable-base / delta-update primitives across the whole DAG.
+When a completed workflow's inputs change, teams want to re-run the workflow to **update its already-published outputs** — not regenerate the whole pipeline from scratch and lose continuity across all its artifacts (stable IDs, unchanged sections, cross-artifact references). Today the only whole-workflow rerun is `fresh`, which discards the prior result and rebuilds. This is the workflow-level counterpart of Issue 1 and the largest item in this group: it applies the same prior-output-as-editable-base / delta-update primitives across the whole DAG. How the rerun is *triggered* (operator or otherwise) is out of scope — manual trigger already works.
 
 ### Proposed direction (non-prescriptive)
 - A `modify` rerun mode for `workflow-run.ps1` (alongside `fresh` / `append`) in which the workflow re-runs against its prior canonical / published artifacts and updates them in place.
-- Reuse the task-level modification machinery (Issue 3) across every task in the run; preserve stable identifiers and unchanged sections workflow-wide.
-- How the rerun is *triggered* (operator or otherwise) is out of scope — manual trigger already works (`workflow-run.ps1`).
+- Reuse the task-level modification machinery (Issue 1) across every task in the run; preserve stable identifiers and unchanged sections workflow-wide.
 
 ### Acceptance criteria
 - [ ] `workflow-run.ps1` supports a modification rerun mode that updates the workflow's prior published artifacts rather than wiping and regenerating from the manifest.
@@ -243,7 +156,7 @@ When a completed workflow's inputs change, teams want to re-run the workflow to 
 
 ---
 
-## Issue 8 — Tasks entering `needs-review` emit no notification
+## Issue 5 — Tasks entering `needs-review` emit no notification
 
 **Type:** Enhancement · **Area:** runtime / notifications · **Size:** S
 
@@ -268,7 +181,7 @@ Review gates are a core feature (`needs-review`, `task-submit-review`, reject-wi
 
 ---
 
-## Issue 9 — Integration/base branch is hard-coded to `main`/`master`
+## Issue 6 — Integration/base branch is hard-coded to `main`/`master`
 
 **Type:** Enhancement · **Area:** runtime / worktree + git · **Size:** S–M
 
@@ -276,10 +189,10 @@ Review gates are a core feature (`needs-review`, `task-submit-review`, reject-wi
 The branch that task worktrees are created from and squash-merged back into is resolved purely by name — only `main` or `master`. There is no setting to point it at a different integration branch (`develop`, `trunk`, a release line). A repo whose trunk is named anything else cannot be used without renaming.
 
 ### Current behaviour
-- `Resolve-MainBranch` finds the integration branch by explicit name lookup over `@('main','master')` only, and deliberately does not read symbolic HEAD: `core/runtime/modules/WorktreeManager.psm1:141-155`.
-- Worktree creation branches off that base; if neither `main` nor `master` exists it throws, instructing the user to rename their integration branch: `:490-494` (error at `:491-492`).
-- The base branch chosen at creation is recorded on the worktree entry (`base_branch`) and reused at completion, immune to HEAD drift: `:466`, `:589`, `:647`.
-- No `branch` / `base_branch` / `default_branch` key exists in settings (`core/settings/settings.default.json`).
+- `Resolve-MainBranch` finds the integration branch by explicit name lookup over `@('main','master')` only, and deliberately does not read symbolic HEAD: `core/runtime/modules/WorktreeManager.psm1:141-153` (loop at `:148`).
+- Worktree creation branches off that base; if neither `main` nor `master` exists it throws, instructing the user to rename their integration branch: `:490-494` (error at `:491-492`, `git worktree add` at `:494`). The task branch name itself is a fixed convention `task/{short-id}-{slug}` (`:443`).
+- The base branch chosen at creation is recorded on the worktree entry (`base_branch`) and reused at completion, immune to HEAD drift.
+- No `branch` / `base_branch` / `default_branch` key exists in settings (`core/settings/settings.default.json` has no git section at all).
 
 ### Why it matters
 Many repositories integrate on a branch other than `main`/`master` (`develop`, `trunk`, a release line). Today dotbot forces a rename, which is a non-starter for established repos and team conventions. Making the integration branch configurable is a small, generic change with broad applicability.
@@ -295,7 +208,7 @@ Many repositories integrate on a branch other than `main`/`master` (`develop`, `
 
 ---
 
-## Issue 10 — No first-class PR-based integration; core only direct-merges, PR creation reinvented per workflow
+## Issue 7 — No first-class PR-based integration; core only direct-merges, PR creation reinvented per workflow
 
 **Type:** Enhancement · **Area:** runtime / git integration · **Size:** M–L
 
@@ -303,36 +216,36 @@ Many repositories integrate on a branch other than `main`/`master` (`develop`, `
 Core integrates a completed task by squash-merging its branch into the base branch locally and then pushing the base branch straight to the remote. There is no option to integrate via a pull request, and no shared PR primitive — every workflow that wants a PR hand-rolls it with a provider-specific CLI. On a protected / PR-required base branch, the direct push is rejected.
 
 ### Current behaviour
-- On approval, `Complete-TaskWorktree` squash-merges the task branch into the base branch (`core/runtime/modules/WorktreeManager.psm1:615`, `:647`) and then **pushes the base branch directly to `origin`** — `git push origin $baseBranch` (`:838-849`). No PR is opened.
-- Core has no PR-creation capability. PRs exist only as workflow content and are provider-specific: `start-from-jira` opens an ADO PR via `az repos pr create --draft` in a prompt (`workflows/start-from-jira/recipes/prompts/11-draft-system-docs.md:198-206`); a GitHub `gh pr` reference exists only as manual guidance in `core/prompts/05-retrospective-task.md`. There is no `gh` integration path and nothing shared across workflows.
+- On approval, `Complete-TaskWorktree` squash-merges the task branch into the base branch (`git merge --squash` at `core/runtime/modules/WorktreeManager.psm1:734`; base branch resolved at `:647`) and then **pushes the base branch directly to `origin`** — `git push origin $baseBranch` (`:838-849`, push at `:843`). No PR is opened.
+- Core has no PR-creation capability. PRs exist only as workflow content and are provider-specific: `start-from-jira` opens an ADO PR via `az repos pr create --draft` in a prompt (`workflows/start-from-jira/recipes/prompts/11-draft-system-docs.md:198-206`); a GitHub `gh pr create` reference exists only as manual guidance in `core/prompts/05-retrospective-task.md:113`. There is no shared PR primitive across workflows.
 - Result: a direct push to a protected base branch fails, and any workflow needing PR-based integration reinvents "push branch → open PR" per provider.
 
 ### Why it matters
-PR-based integration is the norm for most teams (protected `main`, required reviews/checks, CI on PRs). Today dotbot's only integration mode is a direct merge + push, which neither fits protected branches nor gives a review surface on the remote. Because PR creation is reinvented per workflow and per provider, the same logic is duplicated and ADO-only. A generic PR integration mode would let any workflow opt into PR-based delivery without custom code, and would naturally consume the configurable base branch from Issue 9.
+PR-based integration is the norm for most teams (protected `main`, required reviews/checks, CI on PRs). Today dotbot's only integration mode is a direct merge + push, which neither fits protected branches nor gives a review surface on the remote. Because PR creation is reinvented per workflow and per provider, the same logic is duplicated and ADO-only. A generic PR integration mode would let any workflow opt into PR-based delivery without custom code, and would naturally consume the configurable base branch from Issue 6.
 
 ### Proposed direction (non-prescriptive)
-- A first-class integration mode (alongside the existing direct squash-merge) that pushes the task branch and opens a PR against the (configurable — Issue 9) base branch, instead of merging + pushing locally.
+- A first-class integration mode (alongside the existing direct squash-merge) that pushes the task branch and opens a PR against the (configurable — Issue 6) base branch, instead of merging + pushing locally.
 - A shared, provider-aware PR primitive (GitHub `gh` and ADO `az` at minimum) — a task type, MCP tool, or completion option — so workflows stop reinventing it.
-- PR metadata (title, body with task/links, draft flag) supplied by the workflow; the mechanics (push, provider detection, PR open) provided by core.
+- PR metadata (title, body with task/links, draft flag) supplied by the workflow; the mechanics (push, provider detection, PR open) provided by core. For PRs that target a *different* repo, see Issue 13.
 
 ### Acceptance criteria
 - [ ] A task/workflow can choose PR-based integration instead of direct merge + push.
 - [ ] PR creation works for at least GitHub and ADO via a shared primitive (no per-workflow reimplementation).
-- [ ] The PR targets the configurable base branch (Issue 9); the existing direct-merge mode remains the default and is unaffected.
+- [ ] The PR targets the configurable base branch (Issue 6); the existing direct-merge mode remains the default and is unaffected.
 
 ---
 
-## W2-derived engine gaps (Issues 11–17)
+## W2-derived engine gaps (Issues 8–14)
 
-A third workflow has since been examined on top of dotbot: a test-execution + automation pipeline (W2) whose diagram-level shape exposes engine gaps independent of the workflow-content concerns that drove Issues 1–10. These were derived by reading the W2 diagram directly and asking "could a dotbot workflow express this shape if we wanted it to?" For several load-bearing features the answer is no.
+A test-execution + automation pipeline (W2) was examined on top of dotbot, and its diagram-level shape exposes engine gaps independent of the concerns above. These were derived by reading the W2 diagram directly and asking "could a dotbot workflow express this shape if we wanted it to?" For several load-bearing features the answer is no.
 
-W2's chosen *delivery* architecture (a library of IDE-triggerable slash commands rather than a runtime-driven DAG) is a deliberate design tangent and is **not** raised here as a dotbot gap. The items below are the underlying *engine-shape* gaps that would block the W2 pipeline if anyone tried to express it as a dotbot workflow — and that block any third workflow with the same shape, regardless of UI choice.
+W2's chosen *delivery* architecture (a library of IDE-triggerable slash commands rather than a runtime-driven DAG) is a deliberate design tangent and is **not** raised here as a dotbot gap. The items below are the underlying *engine-shape* gaps that would block the W2 pipeline if anyone tried to express it as a dotbot workflow — and that block any workflow with the same shape, regardless of UI choice.
 
 All items below are verified against the current `main` of `core/`; each carries an explicit **W2 diagram reference** in addition to the standard sections.
 
 ---
 
-## Issue 11 — Workflow execution is a strictly forward DAG — no back-edge / loop to an earlier phase
+## Issue 8 — Workflow execution is a strictly forward DAG — no back-edge / loop to an earlier phase
 
 **Type:** Enhancement · **Area:** runtime / control flow · **Size:** XL
 
@@ -361,7 +274,7 @@ Any workflow with a real failure-recovery or review-revision pattern — auto-fi
 One or more of:
 - A workflow-level "loop back to phase X" primitive: when invoked (by a review-reject path, a failure handler, or an agent), the named phase and every dependent downstream task return to their initial state and the chain re-runs forward.
 - A `reject_target` / `loop_back_to` field on review gates and failure handlers that names which earlier phase rollback applies to.
-- Architectural decisions (state retention vs. discard across rolled-back phases, partial-output preservation per Issue 3) settled in implementation design.
+- Architectural decisions (state retention vs. discard across rolled-back phases, partial-output preservation per Issue 1) settled in implementation design.
 
 ### Acceptance criteria
 - [ ] A workflow can declare or trigger "loop back to phase X" semantics; X and every dependent downstream task return to their initial state and re-run forward.
@@ -370,7 +283,7 @@ One or more of:
 
 ---
 
-## Issue 12 — No runtime-value branching — `condition` is path-existence only
+## Issue 9 — No runtime-value branching — `condition` is path-existence only
 
 **Type:** Enhancement · **Area:** runtime / control flow · **Size:** M–L
 
@@ -392,8 +305,8 @@ Real workflows branch on data: "if drift detected → trigger upstream rerun, el
 
 ### Proposed direction (non-prescriptive)
 - A value-aware routing primitive — e.g. a `route_on:` block referencing a prior task's structured output, with named branches that map values to downstream task subsets.
-- Or extend `condition` with comparisons against a typed output value (requires Issue 13's input contract).
-- Plays cleanly with Issue 11 (cycles): a route target may be a downstream branch *or* a back-edge.
+- Or extend `condition` with comparisons against a typed output value (requires Issue 10's input contract).
+- Plays cleanly with Issue 8 (cycles): a route target may be a downstream branch *or* a back-edge.
 
 ### Acceptance criteria
 - [ ] A task can declare branch routing on a prior task's runtime output value.
@@ -402,7 +315,7 @@ Real workflows branch on data: "if drift detected → trigger upstream rerun, el
 
 ---
 
-## Issue 13 — No consumer-entry input contract — tasks have no `inputs:` declaration and no artifact pre-check
+## Issue 10 — No consumer-entry input contract — tasks have no `inputs:` declaration and no artifact pre-check
 
 **Type:** Enhancement · **Area:** runtime / task contract · **Size:** M–L
 
@@ -436,7 +349,7 @@ Drift between producer and consumer is the rule, not the exception: a producer c
 
 ---
 
-## Issue 14 — Preflight is fixed and presence-only — no custom-script and no LLM-driven check support
+## Issue 11 — Preflight is fixed and presence-only — no custom-script and no LLM-driven check support
 
 **Type:** Enhancement · **Area:** runtime / preflight · **Size:** M
 
@@ -455,7 +368,7 @@ Workflow preflight (`requires:`) is fixed to three hardcoded check types, all pr
 
 ### W2 diagram reference
 - 2.1 *Drift preflight* — compares TAD-referenced REQs vs. current backlog / CRD versions in ADO. This is inherently content-based (semantic comparison of an upstream workflow's published artifact against a live source) and feeds 2.2's routing decision. No expressible form today.
-- Reinforces Issue 4 (MCP-server preflight is presence-only): both are symptoms of the same fixed-registry, presence-only design.
+- Reinforces Issue 2 (MCP-server preflight is presence-only): both are symptoms of the same fixed-registry, presence-only design.
 
 ### Why it matters
 Real preflight conditions are often semantic: "the published TAD's REQs match the live ADO backlog within tolerance," "this branch is rebased on the latest base," "the briefing folder contains all required sections." None of these are expressible today, and there is no way for a workflow author to add one without forking the engine. Any precondition more interesting than "is this string present somewhere" forces preflight to be reinvented inside the workflow as a regular task — which defeats the point of a preflight (running before the workflow commits to a run).
@@ -472,7 +385,7 @@ Real preflight conditions are often semantic: "the published TAD's REQs match th
 
 ---
 
-## Issue 15 — No on-demand external task/workflow trigger that feeds evidence into an in-flight task
+## Issue 12 — No on-demand external task/workflow trigger that feeds evidence into an in-flight task
 
 **Type:** Enhancement · **Area:** runtime / task IO + orchestration · **Size:** M–L
 
@@ -498,7 +411,7 @@ Many workflows benefit from ad-hoc, side-channel evidence that a human or a one-
 ### Proposed direction (non-prescriptive)
 - A `task-append-evidence` MCP tool that adds a structured artifact (file path + label + optional shape contract) to a specific task's context, working on any in-flight or queued state — not only `needs-input/`.
 - The running task can re-poll its context (or be whispered to do so) and pick up the new evidence.
-- An on-demand task/workflow trigger primitive so the side-channel agent itself can be a first-class engine action (pairs with the cross-workflow trigger thread inherent to W1→W2 drift handling, and complements Issues 11/13).
+- An on-demand task/workflow trigger primitive so the side-channel agent itself can be a first-class engine action (pairs with the cross-workflow trigger thread inherent to W1→W2 drift handling, and complements Issues 8/10).
 
 ### Acceptance criteria
 - [ ] An ad-hoc agent (or operator) can attach evidence to a specific in-flight task without requiring the task to park itself.
@@ -507,12 +420,12 @@ Many workflows benefit from ad-hoc, side-channel evidence that a human or a one-
 
 ---
 
-## Issue 16 — Multi-repo / cross-repo targets are not a first-class engine concept
+## Issue 13 — Multi-repo / cross-repo targets are not a first-class engine concept
 
 **Type:** Enhancement · **Area:** runtime / git + worktree + settings · **Size:** L–XL
 
 ### Summary
-The engine is architecturally tied to exactly one project repo. Tasks cannot commit / push / PR to any repo other than the dotbot project repo. Cross-repo push and PR creation exist today only as prompt-level bash in one workflow (ADO-only). This issue promotes the multi-repo theme — previously noted in Issue 10's sequencing as "subsumed" — to a standalone item, because it is a precondition for multiple credible workflow classes, not a sub-aspect of PR integration.
+The engine is architecturally tied to exactly one project repo. Tasks cannot commit / push / PR to any repo other than the dotbot project repo. Cross-repo push and PR creation exist today only as prompt-level bash in one workflow (ADO-only). This issue promotes the multi-repo theme — previously noted in Issue 7's sequencing as "subsumed" — to a standalone item, because it is a precondition for multiple credible workflow classes, not a sub-aspect of PR integration.
 
 ### Current behaviour
 - Single `$global:DotbotProjectRoot`, anchored on one `git-common-dir` (`core/mcp/Resolve-ProjectRoot.ps1:23-100`, line 39 `git rev-parse --git-common-dir`). The MCP server, all 35 tools, and the runtime see exactly one repo.
@@ -529,20 +442,20 @@ The engine is architecturally tied to exactly one project repo. Tasks cannot com
 Many delivery patterns span multiple repos: code in one repo, tests in another, generated artifacts in a third. Today every cross-repo step is hand-rolled per-workflow and per-provider (ADO only, in prompts). Making targets first-class lets the engine own commit / push / PR mechanics for all of them with per-target conventions (PR target, base branch, branch naming) — and turns the "branch convention" config that today only `start-from-jira` knows about into a shared primitive.
 
 ### Proposed direction (non-prescriptive)
-- A `targets:` settings concept enumerating named repos with per-target attributes (path or URL, PR target, base branch — generalising Issue 9 to per-target, branch naming convention, push remote).
+- A `targets:` settings concept enumerating named repos with per-target attributes (path or URL, PR target, base branch — generalising Issue 6 to per-target, branch naming convention, push remote).
 - Worktree, commit, push, and PR operations parametrised by a target name; the project repo is the default named target.
 - The existing `external_repo` / `working_dir` task fields evolve into a `target:` reference.
-- Pairs with Issue 10 (PR primitive): the PR primitive accepts a target name and uses the per-target attributes.
+- Pairs with Issue 7 (PR primitive): the PR primitive accepts a target name and uses the per-target attributes.
 
 ### Acceptance criteria
 - [ ] A workflow can declare ≥ 2 targets, and a task can choose which target to write to.
 - [ ] Worktree, commit, push, and PR work against any declared target (not only the project repo).
-- [ ] Per-target base branch and PR target are honoured (depends on Issue 9 / extends Issue 10).
+- [ ] Per-target base branch and PR target are honoured (depends on Issue 6 / extends Issue 7).
 - [ ] The single-target default is unchanged for existing workflows.
 
 ---
 
-## Issue 17 — No external (non-Claude) job invocation + await/ingest primitive
+## Issue 14 — No external (non-Claude) job invocation + await/ingest primitive
 
 **Type:** Enhancement · **Area:** runtime / process types · **Size:** M
 
@@ -564,7 +477,7 @@ Many real workflows orchestrate work that does not live inside Claude — an exi
 ### Proposed direction (non-prescriptive)
 - An `external_job` task type (or a generic `await` primitive): declare invocation (command / webhook / CI trigger), an await contract (poll endpoint, timeout, success predicate), and a result-ingest path (where the structured result lands for downstream tasks).
 - The runner does not block on the awaiting task — it parks and resumes when the job completes.
-- Pairs with Issue 14 (the external job's status could be a preflight or a `condition` source) and Issue 13 (the ingested result becomes a declared input of a downstream task).
+- Pairs with Issue 11 (the external job's status could be a preflight or a `condition` source) and Issue 10 (the ingested result becomes a declared input of a downstream task).
 
 ### Acceptance criteria
 - [ ] A task can trigger an external (non-Claude) job, park while it runs, and resume with the job's structured result.
@@ -584,13 +497,10 @@ These came up during the analysis but are either achievable today by composition
 
 ## Notes on sequencing (informational)
 
-- Issues 1 and 2 are tightly related (output disposition + the unsafe defaults that route document tasks through a worktree); they could be addressed together.
-- Issue 4 is a small, self-contained hardening; Issue 5 is mostly wiring on top of the existing #391 park pattern; Issue 8 is a small notification gap in the same family. All three improve robustness/visibility for any review-gated or external-MCP-dependent workflow.
-- Issues 3 and 7 are the **same capability at two scopes**: Issue 3 is the *task-level* modification re-run (feedback-driven, modify a single task's prior output); Issue 7 is the *workflow-level* modification re-run (the whole completed pipeline updates its already-published artifacts instead of today's `fresh` from-scratch rebuild). Issue 7 builds on Issue 3's primitives applied across the DAG. How a re-run is *triggered* is deliberately out of scope (manual trigger already works).
-- Issues 9 and 10 are about single-repo git integration and pair up: Issue 9 (configurable base branch) is a small prerequisite that Issue 10 (PR-based integration) builds on. The multi-repo / cross-repo dimension was previously noted here as "subsumed by Issue 10"; it is now split out as a standalone item (Issue 16, W2-derived), which builds on both — per-target base branches generalise Issue 9, per-target PR push generalises Issue 10.
-- Issue 6 is independent of the rest.
-- Issues 11 and 12 are the **control-flow pair**: both extend the same forward-only DAG execution model with richer routing — 11 (cycles / back-edges) lets review-reject and failure paths return to an earlier phase; 12 (runtime-value branching) lets a route be chosen by a prior task's output. Together they make real failure-handling and decision-gated pipelines expressible; addressing one without the other leaves half the W2 diagram inexpressible.
-- Issues 13 and 14 are the **entry-validation pair**: 13 validates artifacts at consumer-task entry (the producer-exit `Test-TaskOutput` is the only check today and is too weak — file presence / file count only); 14 validates conditions at workflow entry (the three built-in preflight check types are equally presence-only, with no extension or LLM hook). Both share the "check before run, fail with an actionable reason" pattern and could share infrastructure (a check-result schema, a `needs-input` escalation path on fail).
-- Issue 15 is independent but in the same family as Issue 8 (notification on `needs-review`): both improve the workflow's porosity to the outside world (operator notifications inbound; ad-hoc evidence inbound) without changing the core DAG.
-- Issue 16 (multi-repo / cross-repo targets) builds on Issues 9 (configurable base branch) and 10 (PR primitive) — see Issue 10 / 9 sequencing note above. It is the W2-derived item with the most direct dependency on the existing Issues 1–10.
-- Issue 17 (external job invocation) is independent; it pairs cleanly with Issue 13 (the external job's structured result becomes a declared input of a downstream task) and with Issue 14 (the job's status is a candidate preflight or `condition` source).
+- Issues 1 and 4 are the **same capability at two scopes**: Issue 1 is the *task-level* modification re-run (feedback-driven, modify a single task's prior output); Issue 4 is the *workflow-level* modification re-run (the whole completed pipeline updates its already-published artifacts instead of today's `fresh` from-scratch rebuild). Issue 4 builds on Issue 1's primitives applied across the DAG. How a re-run is *triggered* is deliberately out of scope (manual trigger already works).
+- Issue 2 is a small, self-contained hardening; Issue 3 is mostly wiring on top of the existing #391 park pattern; Issue 5 is a small notification gap in the same family. All three improve robustness/visibility for any review-gated or external-MCP-dependent workflow. Issue 11 generalises Issue 2's shallow-check problem into an extensible, content-aware preflight surface.
+- Issues 6, 7, and 13 are about git integration and stack up: Issue 6 (configurable base branch) is a small prerequisite for Issue 7 (PR-based integration), and Issue 13 (multi-repo / cross-repo targets) generalises both from the single project repo to arbitrary target repos. A team on a protected, non-`main` trunk across several repos needs all three.
+- Issues 8 and 9 are the **control-flow pair**: both extend the same forward-only DAG execution model with richer routing — 8 (cycles / back-edges) lets review-reject and failure paths return to an earlier phase; 9 (runtime-value branching) lets a route be chosen by a prior task's output. Together they make real failure-handling and decision-gated pipelines expressible; addressing one without the other leaves half the test-automation diagram inexpressible.
+- Issues 10 and 11 are the **entry-validation pair**: 10 validates artifacts at consumer-task entry (the producer-exit `Test-TaskOutput` is the only check today and is too weak — file presence / file count only); 11 validates conditions at workflow entry (the three built-in preflight check types are equally presence-only, with no extension or LLM hook). Both share the "check before run, fail with an actionable reason" pattern and could share infrastructure (a check-result schema, a `needs-input` escalation path on fail).
+- Issue 12 is independent but in the same family as Issue 5 (notification on `needs-review`): both improve the workflow's porosity to the outside world (operator notifications inbound; ad-hoc evidence inbound) without changing the core DAG.
+- Issue 14 (external job invocation) is independent; it pairs cleanly with Issue 10 (the external job's structured result becomes a declared input of a downstream task) and with Issue 11 (the job's status is a candidate preflight or `condition` source).

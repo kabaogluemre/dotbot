@@ -276,6 +276,13 @@ function Get-NextTodoTask {
                         category = $content.category
                         type = $content.type
                         script_path = $content.script_path
+                        # prompt is required so a resumed prompt_template task is
+                        # re-classified as a 'prompt' task (Invoke-WorkflowProcess
+                        # line ~917). Without it the task falls through to the
+                        # non-prompt auto-dispatch path and Invoke-TaskMarkInProgress
+                        # throws "not found in analysed/todo/in-progress/done" because
+                        # the resumed task still lives in the analysing/ state dir.
+                        prompt = $content.prompt
                         mcp_tool = $content.mcp_tool
                         mcp_args = $content.mcp_args
                         skip_analysis = $content.skip_analysis
@@ -351,6 +358,13 @@ function Get-NextWorkflowTask {
                         category = $content.category
                         type = $content.type
                         script_path = $content.script_path
+                        # prompt is required so a resumed prompt_template task is
+                        # re-classified as a 'prompt' task (Invoke-WorkflowProcess
+                        # line ~917). Without it the task falls through to the
+                        # non-prompt auto-dispatch path and Invoke-TaskMarkInProgress
+                        # throws "not found in analysed/todo/in-progress/done" because
+                        # the resumed task still lives in the analysing/ state dir.
+                        prompt = $content.prompt
                         mcp_tool = $content.mcp_tool
                         mcp_args = $content.mcp_args
                         skip_analysis = $content.skip_analysis

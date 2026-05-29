@@ -433,7 +433,8 @@ function New-TaskWorktree {
         [Parameter(Mandatory)][string]$TaskName,
         [Parameter(Mandatory)][string]$ProjectRoot,
         [Parameter(Mandatory)][string]$BotRoot,
-        [string]$BranchName = ""   # Optional: if provided, overrides the default task/{shortId}-{slug} naming
+        [string]$BranchName = "",  # Optional: if provided, overrides the default task/{shortId}-{slug} naming
+        [string]$BaseBranch = ""   # Optional: fork source + squash-merge target. Default = repo's main/master.
     )
 
     Initialize-WorktreeMap -BotRoot $BotRoot
@@ -449,12 +450,20 @@ function New-TaskWorktree {
         $BranchName = "task/$shortId-$slug"
     }
 
-    # Worktree path: {repo-parent}/worktrees/{repo-name}/{branch-slug}/
-    # For shared branches (e.g. "feature/issue-42"), sanitize slashes to dashes
+    # Worktree path: {repo-parent}/worktrees/{repo-name}/{dir-name}/
+    # When forking from a feature/integration branch (-BaseBranch), group the
+    # per-task worktrees under that branch's name (postfixed with the task
+    # short-id) so they live in the feature branch's namespace. Otherwise the
+    # dir name is the branch slug. Slashes/special chars are sanitized to dashes.
     $repoParent = Split-Path $ProjectRoot -Parent
     $repoName = Split-Path $ProjectRoot -Leaf
     $worktreeDir = Join-Path $repoParent "worktrees\$repoName"
-    $worktreeDirName = $BranchName -replace '[/\\]', '-' -replace '[^a-zA-Z0-9._-]', '-'
+    if ($BaseBranch) {
+        $baseSlug = $BaseBranch -replace '[/\\]', '-' -replace '[^a-zA-Z0-9._-]', '-'
+        $worktreeDirName = "$baseSlug-$shortId"
+    } else {
+        $worktreeDirName = $BranchName -replace '[/\\]', '-' -replace '[^a-zA-Z0-9._-]', '-'
+    }
     $worktreePath = Join-Path $worktreeDir $worktreeDirName
 
     if (-not (Test-Path $worktreeDir)) {
@@ -466,7 +475,7 @@ function New-TaskWorktree {
         $gitMarker = Join-Path $worktreePath ".git"
         if (Test-Path $gitMarker) {
             # Valid worktree — ensure map entry exists and return it
-            $existingBaseBranch = Resolve-MainBranch -ProjectRoot $ProjectRoot
+            $existingBaseBranch = if ($BaseBranch) { $BaseBranch } else { Resolve-MainBranch -ProjectRoot $ProjectRoot }
             Invoke-WorktreeMapLocked -Action {
                 $lockedMap = Read-WorktreeMap
                 if (-not $lockedMap.ContainsKey($TaskId)) {
@@ -497,10 +506,19 @@ function New-TaskWorktree {
     }
 
     try {
-        # Always branch from the canonical integration branch, not whatever HEAD happens to be checked out
-        $baseBranch = Resolve-MainBranch -ProjectRoot $ProjectRoot
-        if (-not $baseBranch) {
-            throw "Cannot create worktree: no 'main' or 'master' branch found in $ProjectRoot. The repository may be empty (make an initial commit) or use a non-standard integration branch name (rename it to 'main' or 'master')."
+        # Branch base: an explicit feature/integration branch when provided,
+        # otherwise the canonical main/master (never whatever HEAD is on).
+        if ($BaseBranch) {
+            $baseBranch = $BaseBranch
+            git -C $ProjectRoot rev-parse --verify $baseBranch 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Cannot create worktree: base branch '$baseBranch' not found in $ProjectRoot. Create it before forking task worktrees."
+            }
+        } else {
+            $baseBranch = Resolve-MainBranch -ProjectRoot $ProjectRoot
+            if (-not $baseBranch) {
+                throw "Cannot create worktree: no 'main' or 'master' branch found in $ProjectRoot. The repository may be empty (make an initial commit) or use a non-standard integration branch name (rename it to 'main' or 'master')."
+            }
         }
         $output = git -C $ProjectRoot worktree add -b $branchName $worktreePath $baseBranch 2>&1
         if ($LASTEXITCODE -ne 0) {
@@ -1208,6 +1226,51 @@ function Remove-OrphanWorktrees {
 }
 
 # --- Module Exports ---
+function New-SharedFeatureBranch {
+    <#
+    .SYNOPSIS
+    Create the shared feature/integration branch off a base branch if it does not
+    already exist.
+
+    .DESCRIPTION
+    Used by `shared_feature_branch` workflow mode: per-task worktrees fork from
+    this branch and squash-merge back into it, then a final PR targets main.
+    Idempotent — returns success without action if the branch already exists.
+
+    .PARAMETER BaseBranch
+    The branch to fork FROM. Defaults to the repo's main/master. Pass an explicit
+    branch (e.g. the project's current branch) when the dotbot setup — .bot/, the
+    dotbot-registered .mcp.json, etc. — lives on a non-main branch; the forked
+    worktrees inherit whatever is committed on the base, so it must carry .bot/.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$FeatureBranch,
+        [string]$BaseBranch = ""
+    )
+    git -C $ProjectRoot rev-parse --verify $FeatureBranch 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        return @{ success = $true; created = $false; message = "Feature branch '$FeatureBranch' already exists" }
+    }
+    if ($BaseBranch) {
+        git -C $ProjectRoot rev-parse --verify $BaseBranch 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            return @{ success = $false; created = $false; message = "Base branch '$BaseBranch' not found in $ProjectRoot — cannot create feature branch" }
+        }
+        $mainBranch = $BaseBranch
+    } else {
+        $mainBranch = Resolve-MainBranch -ProjectRoot $ProjectRoot
+        if (-not $mainBranch) {
+            return @{ success = $false; created = $false; message = "No 'main'/'master' branch found in $ProjectRoot — cannot create feature branch" }
+        }
+    }
+    $out = git -C $ProjectRoot branch $FeatureBranch $mainBranch 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        return @{ success = $false; created = $false; message = "git branch '$FeatureBranch' off '$mainBranch' failed: $($out -join ' ')" }
+    }
+    return @{ success = $true; created = $true; message = "Created '$FeatureBranch' off '$mainBranch'" }
+}
+
 Export-ModuleMember -Function @(
     'Initialize-WorktreeMap'
     'Read-WorktreeMap'
@@ -1219,6 +1282,7 @@ Export-ModuleMember -Function @(
     'Invoke-Git'
     'Remove-Junctions'
     'New-TaskWorktree'
+    'New-SharedFeatureBranch'
     'Complete-TaskWorktree'
     'Reset-TaskWorktree'
     'Get-TaskWorktreePath'

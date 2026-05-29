@@ -53,7 +53,7 @@ Loaded as the `APPLICABLE_AGENTS` persona for BOTH dotbot phases:
 1. Read the **shared-branch diff** via `git diff <base>...HEAD` — not a PR diff. No PR exists at this stage.
 2. Resolve the parent issue from `workflow-launch-prompt.txt`. No PR body to parse for `Closes #N`.
 3. Run **gap analysis** (see below) before writing any tests.
-4. Read existing test patterns in the cloned repo (`./src/`) — match the style.
+4. Read existing test patterns in the repository — match the style.
 5. Generate **unit tests only**. They land on the shared branch via the framework's auto-commit/push — never push to `main` manually.
 6. If you find a bug while writing tests, comment on the **issue** with details — do not modify production code.
 
@@ -174,7 +174,7 @@ Post as an **issue comment** (no PR exists yet — Open PR runs after this task)
 
 ## Output
 
-1. Write test files to the cloned repo (`./src/`). The framework commits and pushes them to the shared branch automatically when the task is marked done — no manual `git push` needed.
+1. Write test files into the repository. The framework commits them and squash-merges them into the shared feature branch automatically when the task is marked done — no manual `git push` needed.
 2. Run the configured unit test command (`issue_driven.test.unit.command`) — all tests must pass.
 3. Post a summary **issue** comment: `Added X unit tests covering {areas} on branch \`{shared_branch}\`.`
 4. If a bug is found, post an **issue** comment with reproduction steps + expected vs. actual.

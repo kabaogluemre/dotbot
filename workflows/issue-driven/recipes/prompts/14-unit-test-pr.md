@@ -109,7 +109,7 @@ mcp__dotbot__task_mark_done({
 ## Rules
 
 - Work on the **shared feature branch** — never on `main`. The framework auto-commits and pushes when this task is done.
-- Match existing test patterns from the cloned repo (`./src/`).
+- Match existing test patterns in the repository.
 - If you find a bug, post an issue comment with repro steps — do not modify production code.
 - **Unit tests only** — no integration, no E2E, no mocks-only tests.
 - Gap analysis is **mandatory** — always post the comment, even if both sections are empty.

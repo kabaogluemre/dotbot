@@ -41,6 +41,8 @@ function Read-WorkflowManifest {
         min_dotbot_version = ""
         rerun = "fresh"
         shared_branch = ""
+        shared_feature_branch = $false
+        feature_branch_base = "main"
         requires = @{ env_vars = @(); mcp_servers = @(); cli_tools = @() }
         mcp_servers = @{}
         form = @{}
@@ -72,7 +74,7 @@ function Read-WorkflowManifest {
 
     # Simple fallback parser (handles flat scalars + type/name/description/extends)
     Get-Content $yamlPath | ForEach-Object {
-        if ($_ -match '^\s*(type|name|description|extends|version|rerun|icon|license|repository|homepage|readme|min_dotbot_version|shared_branch)\s*:\s*(.+)$') {
+        if ($_ -match '^\s*(type|name|description|extends|version|rerun|icon|license|repository|homepage|readme|min_dotbot_version|shared_branch|shared_feature_branch|feature_branch_base)\s*:\s*(.+)$') {
             $manifest[$Matches[1]] = $Matches[2].Trim().Trim('"').Trim("'")
         }
     }

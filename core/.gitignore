@@ -7,8 +7,9 @@ profile/
 # Chrome dev profile (isolated browser for dev dashboard)
 .chrome-dev/
 
-# Session run logs (autonomous execution history)
-state/sessions/runs/
+# Session runtime state (ephemeral — rewritten each run; .gitkeep keeps the dir)
+workspace/sessions/runs/*
+!workspace/sessions/runs/.gitkeep
 
 # Development process tracking
 .dev-pids.json

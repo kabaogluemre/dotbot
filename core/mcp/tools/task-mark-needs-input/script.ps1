@@ -72,6 +72,7 @@ function Invoke-TaskMarkNeedsInput {
                 options        = $q.options
                 recommendation = if ($q.recommendation) { $q.recommendation } else { "A" }
                 asked_at       = $askedAt
+                type           = $questionType
             }
         }
         $updates['pending_questions'] = $existingPending + $newPending
@@ -95,6 +96,7 @@ function Invoke-TaskMarkNeedsInput {
             options        = $question.options
             recommendation = if ($question.recommendation) { $question.recommendation } else { "A" }
             asked_at       = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+            type           = $questionType
         }
         $updates['pending_question'] = $pendingQuestion
         $updates['split_proposal'] = $null

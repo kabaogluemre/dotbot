@@ -33,7 +33,7 @@ Several of these are natural extensions of patterns dotbot already has:
 
 | # | Title | Type | Area | Size |
 |---|-------|------|------|------|
-| 1 | Re-run regenerates from scratch — no partial / in-place regeneration of prior output (task level) | Enhancement | runtime / task + workflow rerun | L |
+| 1 | `revise` review outcome — reviewer can request changes without discarding prior output | Enhancement | runtime / review API + task lifecycle | S–M |
 | 2 | MCP-server preflight is presence-only — a dead/unauthenticated server passes | Bug | ui / preflight | S |
 | 3 | External-MCP auth expiry wedges silently mid-run; `AuthLimit` classification is dead code | Bug | runtime / failure handling | M |
 | 4 | No workflow-level *modification* re-run mode — whole-workflow rerun is fresh-from-scratch only | Enhancement | runtime / workflow rerun | L–XL |
@@ -50,30 +50,42 @@ Several of these are natural extensions of patterns dotbot already has:
 
 ---
 
-## Issue 1 — Re-run regenerates from scratch — no partial / in-place regeneration of prior output (task level)
+## Issue 1 — `revise` review outcome: reviewer can request changes without discarding prior output
 
-**Type:** Enhancement · **Area:** runtime / task + workflow rerun · **Size:** L
+**Type:** Enhancement · **Area:** runtime / review API + task lifecycle · **Size:** S–M
 
 ### Summary
-When a task is re-run, the prior output is not available as an **editable base** — it regenerates from an empty worktree. There is no way to regenerate only the changed sections (partial / delta). Reviewer feedback is already handled well; what is missing is *retaining the prior artifact and editing on top of it*.
+The review gate is binary today: `approve` (squash-merge + cleanup) or `reject` (worktree + branch nuked, task restarts from an empty worktree with accumulated feedback). There is no middle option for *"your output is mostly right — address this feedback on top of what you have"*. Every rejection forces a from-scratch redo, even when only one section needs to change.
+
+Add a third review outcome — **`revise`** — that preserves the prior output as an editable base. The reviewer chooses; the engine respects the choice. This puts the "is the prior artifact salvageable?" decision with the only party who can actually answer it.
 
 ### Current behaviour
 - **Feedback handling — already works (do not rebuild this):** on rejection a `comment` is mandatory and `reviewer_feedback` is accumulated across cycles (`core/mcp/tools/task-submit-review/script.ps1:40-57`), then injected into **both** `core/prompts/98-analyse-task.md` (`{{REVIEWER_FEEDBACK}}` at `:57`) and `core/prompts/99-autonomous-task.md` (`:77`) via `core/runtime/modules/prompt-builder.ps1:141-155`, under a "you MUST address ALL of the following feedback" heading.
-- **Task level:** on reject, the task's execution-phase fields are cleared, the task returns to `todo`, and `Reset-TaskWorktree` removes the worktree and branch — the next cycle starts in an empty worktree (`core/mcp/tools/task-submit-review/script.ps1:59-86`; `Reset-TaskWorktree` at `core/runtime/modules/WorktreeManager.psm1:904-970`, worktree removal `:941`, branch delete `:952`). The prior draft files are gone.
-- Output is validated only by file existence / count (`Test-TaskOutput`, `core/runtime/modules/ProcessTypes/Invoke-WorkflowProcess.ps1:131-190`); there is no content-level diff / patch / partial-update primitive (only git merge-conflict handling exists).
+- **On reject (current behaviour):** the task's execution-phase fields are cleared, the task returns to `todo`, and `Reset-TaskWorktree` removes the worktree and deletes the branch (`core/mcp/tools/task-submit-review/script.ps1:59-86`; `Reset-TaskWorktree` at `core/runtime/modules/WorktreeManager.psm1:904-970`, worktree removal `:941`, branch delete `:952`). The prior draft files are gone — the next cycle starts in an empty worktree.
+- Net effect: **feedback survives the rerun, but the artifact does not.** The model rebuilds from zero, even when the reviewer only wanted one section changed. Stable internal structure that wasn't explicitly captured (IDs, ordering, cross-references) drifts on each regeneration.
+- The review API has no third decision value — `task-submit-review` accepts only `approve` / `reject` (see decision handling at `core/mcp/tools/task-submit-review/script.ps1:39-98`).
 
 ### Why it matters
-For any workflow producing a large or structured artifact that evolves over time, regenerating from scratch is both wasteful and risky: the whole thing is rewritten when only one section changed, and stable internal structure that was not explicitly captured (internal IDs, section ordering) can drift. Feedback is already fed back in — the missing piece is partial regeneration on top of the retained prior output. This is the *task-level* counterpart of Issue 4 (workflow-level).
+For any review-gated workflow producing a non-trivial artifact (specs, plans, structured documents, code with stable identifiers), forcing a from-scratch redo on every rejection is both wasteful and risky. The reviewer is the only party who knows whether the prior output is salvageable — that decision should live with them, not be forced into one of two extremes by the engine.
+
+Making this a reviewer-facing choice (rather than an implicit engine "modify mode" with some heuristic trigger) is also the cleanest design: there is no trigger to design, no condition to detect — the reviewer just picks one of three outcomes. This is the *task-level* counterpart of Issue 4 (workflow-level `revise` semantics across the whole DAG).
 
 ### Proposed direction (non-prescriptive)
-- On rerun, retain the prior output as editable input rather than discarding the worktree.
-- A delta-aware update that regenerates only the changed sections; if stable internal IDs are in scope, preserve them across reruns.
-- Exploratory — the architectural shape (a separate "modify" mode, a post-pass, or in-prompt) is for maintainers to decide.
+- Add a third decision value alongside `approve` / `reject` — suggested **`revise`** (alternatives: `request_changes`, `revise_in_place`); final name for maintainers to pick.
+- On `revise`:
+  - **Do not** call `Reset-TaskWorktree`. Worktree, branch, and prior output files remain intact on disk.
+  - Clear only the execution-phase fields needed to make the task re-pickable; preserve the `analysed` payload so analysis does not have to re-run from scratch.
+  - State transition: `needs-review → analysed` (or `→ in-progress` directly) — explicitly **not** `→ todo`, which is reserved for `reject`'s full restart.
+  - The existing `reviewer_feedback` accumulation + prompt injection continues to work unchanged; the model now sees the prior artifact on disk **plus** the accumulated feedback.
+- `approve` and `reject` behaviour are unchanged — this is purely additive. Backward compatible.
+- Whether the implementation prompt (`99-autonomous-task.md`) needs a `revise`-aware branch (e.g. "prior output exists, edit on top rather than recreate from zero") is a smaller follow-up. The minimum viable cut is: keep the worktree, let the model see its own prior files, keep injecting feedback — the model can be trusted to edit rather than rebuild when its own draft is already in the worktree.
 
 ### Acceptance criteria
-- [ ] A task can be re-run with its previous output available as an editable base (not from an empty worktree).
-- [ ] Only the changed parts can be regenerated, guided by the cumulative feedback.
-- [ ] The existing feedback injection is preserved.
+- [ ] `task-submit-review` accepts a third decision value (`revise` or maintainer-chosen equivalent), with a mandatory comment like `reject`.
+- [ ] On `revise`: worktree, branch, and prior output files are preserved on disk; `Reset-TaskWorktree` is **not** invoked.
+- [ ] On `revise`: the task transitions to a re-pickable state that does **not** require re-running analysis from scratch (e.g. `analysed` or `in-progress`).
+- [ ] Existing `reviewer_feedback` injection (`98-analyse-task.md`, `99-autonomous-task.md`) continues to work for all three outcomes.
+- [ ] `approve` and `reject` semantics are unchanged.
 
 ---
 
@@ -143,11 +155,11 @@ Re-running a *whole* completed workflow has no "modification" mode. `workflow-ru
 - There is no first-class "workflow run" entity to re-enter or modify — the active workflow is resolved from `settings.workflow`, falling back to the alphabetically-first installed workflow (`Get-ActiveWorkflowManifest`, `core/runtime/modules/workflow-manifest.ps1:201-250`, fallback at `:239-247`).
 
 ### Why it matters
-When a completed workflow's inputs change, teams want to re-run the workflow to **update its already-published outputs** — not regenerate the whole pipeline from scratch and lose continuity across all its artifacts (stable IDs, unchanged sections, cross-artifact references). Today the only whole-workflow rerun is `fresh`, which discards the prior result and rebuilds. This is the workflow-level counterpart of Issue 1 and the largest item in this group: it applies the same prior-output-as-editable-base / delta-update primitives across the whole DAG. How the rerun is *triggered* (operator or otherwise) is out of scope — manual trigger already works.
+When a completed workflow's inputs change, teams want to re-run the workflow to **update its already-published outputs** — not regenerate the whole pipeline from scratch and lose continuity across all its artifacts (stable IDs, unchanged sections, cross-artifact references). Today the only whole-workflow rerun is `fresh`, which discards the prior result and rebuilds. This is the workflow-level counterpart of Issue 1: it applies the same "preserve prior output, edit on top" semantics that Issue 1 introduces at the task level (`revise` outcome) across every task in the DAG. How the rerun is *triggered* (operator or otherwise) is out of scope — manual trigger already works.
 
 ### Proposed direction (non-prescriptive)
-- A `modify` rerun mode for `workflow-run.ps1` (alongside `fresh` / `append`) in which the workflow re-runs against its prior canonical / published artifacts and updates them in place.
-- Reuse the task-level modification machinery (Issue 1) across every task in the run; preserve stable identifiers and unchanged sections workflow-wide.
+- A `modify` (or `revise`) rerun mode for `workflow-run.ps1` (alongside `fresh` / `append`) in which the workflow re-runs against its prior canonical / published artifacts and updates them in place.
+- Effectively: start each task as if it had received a `revise` review outcome (Issue 1) — worktree/output preserved, prompt sees the prior artifact, model edits on top. Preserve stable identifiers and unchanged sections workflow-wide.
 
 ### Acceptance criteria
 - [ ] `workflow-run.ps1` supports a modification rerun mode that updates the workflow's prior published artifacts rather than wiping and regenerating from the manifest.
@@ -497,7 +509,7 @@ These came up during the analysis but are either achievable today by composition
 
 ## Notes on sequencing (informational)
 
-- Issues 1 and 4 are the **same capability at two scopes**: Issue 1 is the *task-level* modification re-run (feedback-driven, modify a single task's prior output); Issue 4 is the *workflow-level* modification re-run (the whole completed pipeline updates its already-published artifacts instead of today's `fresh` from-scratch rebuild). Issue 4 builds on Issue 1's primitives applied across the DAG. How a re-run is *triggered* is deliberately out of scope (manual trigger already works).
+- Issues 1 and 4 are the **same capability at two scopes**: Issue 1 introduces a `revise` review outcome at the *task level* (reviewer keeps the prior artifact, feedback is applied on top); Issue 4 extends the same "preserve prior output, edit on top" semantics to the *workflow level* (the whole completed pipeline updates its already-published artifacts instead of today's `fresh` from-scratch rebuild). Issue 4 builds on Issue 1's primitives applied across the DAG. How a re-run is *triggered* is deliberately out of scope (manual trigger already works).
 - Issue 2 is a small, self-contained hardening; Issue 3 is mostly wiring on top of the existing #391 park pattern; Issue 5 is a small notification gap in the same family. All three improve robustness/visibility for any review-gated or external-MCP-dependent workflow. Issue 11 generalises Issue 2's shallow-check problem into an extensible, content-aware preflight surface.
 - Issues 6, 7, and 13 are about git integration and stack up: Issue 6 (configurable base branch) is a small prerequisite for Issue 7 (PR-based integration), and Issue 13 (multi-repo / cross-repo targets) generalises both from the single project repo to arbitrary target repos. A team on a protected, non-`main` trunk across several repos needs all three.
 - Issues 8 and 9 are the **control-flow pair**: both extend the same forward-only DAG execution model with richer routing — 8 (cycles / back-edges) lets review-reject and failure paths return to an earlier phase; 9 (runtime-value branching) lets a route be chosen by a prior task's output. Together they make real failure-handling and decision-gated pipelines expressible; addressing one without the other leaves half the test-automation diagram inexpressible.
